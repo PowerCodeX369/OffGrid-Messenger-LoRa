@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.1.0-rc.1] — 2026-11-12
+
+**LoRa text reliability/performance source candidate; hardware acceptance pending.**
+
+- `SENT` now means actual SX1278 TxDone (single gray tick when all fragments transmitted); `RADIOACK` is a separate authenticated RF-fragment confirmation.
+- Only an authenticated encrypted OGM4 delivered/read receipt produces double-gray/blue ticks; a lost receipt stays unconfirmed.
+- Remove redundant firmware-level fragment-delivered radio packets and unnecessary application-ACK-driven data retransmissions.
+- Priority `CTRLHEX` for encrypted receipts; up to three browser-prepared text fragments, but a single outstanding unacknowledged LoRa RF frame.
+- SX1278 FIFO packet burst over SPI DMA; 218-byte TX/RX emulation regression test.
+- Shorter bounded radio ACK wait with randomized backoff, reduced idle HELLO traffic, persistent PSA HMAC key handle, and per-stage timing diagnostics.
+- Reject older firmware without `ACKENGINE=2` to prevent silent v1.0/v1.1 mixing.
+- Photo/voice/video remain disabled, Android files unchanged, and no Wi-Fi or ESP-NOW runtime calls.
+
+**Important:** No real ESP-IDF build, benchmark, or two-board acceptance test was possible in the source authoring environment. No guaranteed text latency or packet-loss rate is claimed.
+
+
 ## [1.0.0] — 2026-11-12
 
 First independent OffGrid Messenger **LoRa-only** source release.
