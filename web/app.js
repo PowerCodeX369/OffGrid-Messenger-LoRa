@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=96*1024,MAX_VOICE_MS=P.VOICE_MAX_MS,STORE='OffGridMessengerV14';
-const APP_VERSION='1.6.1-rc1-lora';
+const APP_VERSION='1.6.1-rc2-lora';
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
 const stateRank={sending:0,queued:0,sent:1,failed:1,delivered:2,read:3};
@@ -14,7 +14,7 @@ let localMac=null,secretKey=null,peerMac=null,activeContact='Nearby node',firmwa
  * existing-profile radio frames, and both peers revert if not confirmed. */
 let currentProfile='BALANCED', profileTransition=false;
 let profileRadio={sf:7,bw:250000,power:10};
-const profileLabels={LOW:'Fast / Nominal 18 dBm',BALANCED:'Balanced',MAX:'Max Power / Range',EXPERIMENTAL:'Experimental 22 dBm (unsupported)'};
+const profileLabels={LOW:'Fast / Nominal 18 dBm',BALANCED:'Balanced',MAX:'Max Power / Range'};
 let highPaVerified=false;
 
 let pendingNodeGet=null,pendingNodeSet=null;
@@ -1030,48 +1030,47 @@ function onProfileLine(line){
    toast(`LoRa profile: ${parts.slice(2).join(' ')||'request failed'}`);
  }
 }
+/* Only one browser starts the change. The other follows a HMAC-authenticated
+ * radio control request; the initiating user checks BOTH devices before PA18.
+ * Never throw away normal outgoing text just to make a mode switch succeed. */
 async function requestProfileChange(mode){
  if(!['LOW','BALANCED','MAX'].includes(mode))return;
  if(!verified||!writer||!secretKey){toast('Connect and pair the ESP32 first');return;}
- if(profileTransition){toast('LoRa profile negotiation already running');return;}
- if(speedDiagnostics.busy){toast('Cancel the speed test before changing mode');return;}
- if((mode==='LOW'||mode==='MAX')&&!highPaVerified){
-  toast('Enable +18 dBm on this node first, and verify the peer has enabled it too');return;
+ if(profileTransition){toast('A profile change is already in progress');return;}
+ if(speedDiagnostics.busy){toast('Finish the speed test before changing modes');return;}
+ const busy=Boolean(transferQueue.length||activeTransfer||pendingRadio()||
+    rfScheduler.depth||urgentReceipts.length||bulkLink?.active);
+ if(busy){toast('Wait until pending messages and receipts finish, then change mode');return;}
+ if(mode===currentProfile){toast(`Already using ${profileLabels[mode]}`);return;}
+ const high=(mode==='LOW'||mode==='MAX');
+ if(high){
+  if(!confirm('I have checked BOTH ESP32 radio boards, their matched 433 MHz antennas, stable 3.3 V supplies under TX load, hardware limits and local RF permissions. Authorize nominal +18 dBm on BOTH radios and coordinate the change with one click?'))return;
  }
- const busy=Boolean(transferQueue.length||activeTransfer||pendingRadio()||rfScheduler.depth||urgentReceipts.length);
- let force=false;
- if(busy){
-   if(!confirm('There are unfinished messages or receipts. Force a profile change? Their delivery may remain unconfirmed.'))return;
-   force=true;
-   if(pendingRadio())failPendingRadio(Error('Manual LoRa profile change; delivery unconfirmed'));
-   rfScheduler.cancelQueued('Manual LoRa profile change');
-   for(const job of transferQueue.splice(0))if(job.record)void setState(job.record,'failed','Profile change: delivery unconfirmed');
- }
- try{await writeLine(`PROFILE ${mode}${force?' FORCE':''}`);profileTransition=true;toast('Profile request sent to ESP32');}
- catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
+ profileTransition=true;
+ try{
+  if(high&&!highPaVerified){
+   // This command and the next are serialized on USB, and then by the
+   // firmware command queue. The sender authorizes locally first.
+   await writeLine('POWER18 VERIFIED');
+  }
+  await writeLine(`PROFILE ${mode}`);
+  toast('Requesting synchronized profile change on both radios…');
+ }catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
 }
 function showProfileDialog(){showDialog('Manual LoRa radio profiles',body=>{
- body.append(el('p','','Choose a mode manually. One node sends an authenticated request using the CURRENT radio profile; the other node follows only for this user-requested switch. If the new link cannot be confirmed, the firmware rolls back. Both nodes must use v1.6. An older firmware build uses incompatible modulation and ARQ framing.'));
+ body.append(el('p','','Select a mode on ONE browser only. The ESP32 signs the mode-change request and coordinates the peer automatically. Both ESP32s must run v1.6.1-rc.2. If synchronization fails, reset both radios to return to Balanced.'));
  const entries=[
-  ['LOW','Fast / Nominal 18 dBm','SF7 · 500 kHz · +18 dBm (special PA_DAC, requires verified 3.3V supply on BOTH nodes)'],
-  ['BALANCED','Balanced','SF7 · 250 kHz · +10 dBm · default on both nodes'],
-  ['MAX','Max Power / Range','SF9 · 125 kHz · nominal +18 dBm (PA_DAC opt-in on BOTH nodes), slower but greater sensitivity'],
-  ['EXPERIMENTAL','Experimental +22 dBm','UNSUPPORTED by SX1278, disabled; never attempts an RF overdrive']
+  ['LOW','Fast / Nominal 18 dBm','SF7 · 500 kHz · +18 dBm (special PA_DAC; both boards must be checked)'],
+  ['BALANCED','Balanced','SF7 · 250 kHz · +10 dBm · default at boot'],
+  ['MAX','Max Power / Range','SF9 · 125 kHz · nominal +18 dBm; slower, higher sensitivity']
  ];
  for(const [value,name,details] of entries){
    const row=el('div','profile-mode-choice');
    const b=el('button','quiet-button',`${name}${currentProfile===value?' ✓':''}`);
-   const note=el('p','',details);b.disabled=profileTransition||!verified||value==='EXPERIMENTAL';
+   const note=el('p','',details);b.disabled=profileTransition||!verified;
    b.onclick=()=>{closeDialog();void requestProfileChange(value);};row.append(b,note);body.append(row);
  }
- const pa=el('button','quiet-button',highPaVerified?'Local +18 dBm enabled ✓':'Verify & enable local +18 dBm');
- pa.disabled=!verified;
- pa.onclick=()=>{
-  if(!confirm('I have checked a stable 3.3 V supply under TX load, suitable 433 MHz antenna, module/PA limits and legal permissions. Enable nominal +18 dBm on THIS ESP32 only? Repeat on the peer.'))return;
-  void writeLine('POWER18 VERIFIED').catch(e=>toast('Power setting error: '+e.message));
- };
- body.append(pa);
- body.append(el('p','','Experimental +22 dBm is NOT possible on the SX1278. Fast +18 uses PA_DAC special high-power mode; this is nominal chip output, not measured antenna power. Both nodes require individual power verification and opt-in. No automatic mode switching.'));
+ body.append(el('p','','There is no automatic rate or power adaptation. The peer follows the manual, authenticated request without a second click. The unsupported +22 dBm setting has been removed.'));
  const diag=el('button','quiet-button','USB diagnostics');diag.onclick=diagnoseUsb;body.append(diag);
 });}
 function parseLine(raw){const s=raw.trim();if(!s)return;
@@ -1094,7 +1093,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
 
  if(s.startsWith('POWER18|')){
   highPaVerified=s.startsWith('POWER18|ENABLED');
-  toast(highPaVerified?'18 dBm locally enabled; enable on the peer too':'18 dBm option disabled or refused');return;
+  toast(highPaVerified?'High-PA authorization accepted on the initiating node':'High-PA authorization disabled or refused');return;
  }
  if(bulkLink?.onLine(s))return;
  if(s.startsWith('PROFILE|')){onProfileLine(s);return;}
@@ -1111,7 +1110,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=4')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.6.1-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.6.1-rc.2 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
@@ -1384,7 +1383,7 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.6.1-rc.1'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.6.1-rc.2'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
   ['Profile',`${profileLabels[currentProfile]}: SF${profileRadio.sf} / ${profileRadio.bw/1000} kHz / CR 4/5 / TX ${profileRadio.power} dBm`],
