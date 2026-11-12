@@ -1,15 +1,21 @@
 'use strict';
-/* OffGrid Messenger LoRa v1.2.0: encrypted text over SX1278 / USB Serial.
+/* OffGrid Messenger LoRa v1.5.0: encrypted text over SX1278 / USB Serial.
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=96*1024,MAX_VOICE_MS=P.VOICE_MAX_MS,STORE='OffGridMessengerV14';
-const APP_VERSION='1.2.0-lora';
+const APP_VERSION='1.5.0-lora';
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
 const stateRank={sending:0,queued:0,sent:1,failed:1,delivered:2,read:3};
 const encoder=new TextEncoder();
 let port=null,reader=null,writer=null,readPromise=null,closing=false,verified=false,serialBuffer='',writeChain=Promise.resolve(),handshakeTimer=null;
 let localMac=null,secretKey=null,peerMac=null,activeContact='Nearby node',firmwareMismatchNotified=false;
+/* Profile changes require a user click. Firmware negotiates over authenticated
+ * existing-profile radio frames, and both peers revert if not confirmed. */
+let currentProfile='BALANCED', profileTransition=false;
+let profileRadio={sf:7,bw:250000,power:10};
+const profileLabels={LOW:'Low Power / Fast',BALANCED:'Balanced',MAX:'Max Power / Range'};
+
 let pendingNodeGet=null,pendingNodeSet=null;
 /* USB diagnostics: distinguish missing console output from incompatible or old firmware. */
 const usbLog=[];
@@ -137,7 +143,7 @@ async function runLoraSpeedTest(size,count,button,outputNode,cancelButton){
  if(transferQueue.length||activeTransfer||rfScheduler.depth||urgentReceipts.length){toast('Finish existing transfers first');return;}
  speedDiagnostics.busy=true;speedDiagnostics.cancelRequested=false;button.disabled=true;cancelButton.disabled=false;
  const run={results:[],started:performance.now(),size,count};
- outputNode.textContent='Starting encrypted LoRa benchmark…\n';
+ outputNode.textContent=`Starting encrypted LoRa benchmark · ${profileLabels[currentProfile]} · SF${profileRadio.sf}/BW${profileRadio.bw/1000}/TX${profileRadio.power}dBm…\n`;
  try{
   for(let i=0;i<count;i++){
    if(speedDiagnostics.cancelRequested)throw Error('Benchmark canceled');
@@ -287,8 +293,8 @@ function photoBudget(){
 function updateLinkBadge(){
  const node=$('linkModeLabel');if(!node)return;
  const signal=radioTelemetry.rssi===null?'RSSI unknown':`${radioTelemetry.rssi} dBm`;
- node.textContent=`LoRa SF7 · BW 125 kHz · 433 MHz · ${signal}`;
- node.title=`Fixed LoRa profile, not measured distance. Authenticated packets heard: ${radioTelemetry.rx}. Peer: ${radioTelemetry.peer}. Firmware retries: ${radioTelemetry.retries}.`;
+ node.textContent=`${profileLabels[currentProfile]||currentProfile} · SF${profileRadio.sf} · BW ${profileRadio.bw/1000} kHz · ${profileRadio.power} dBm · ${signal}`;
+ node.title=`Manual LoRa profile, not distance detection. Authenticated frames: ${radioTelemetry.rx}. Peer: ${radioTelemetry.peer}. Retries: ${radioTelemetry.retries}.`;
 }
 
 function recordLinkResult(rtt,attempts,isPhoto=false){
@@ -977,6 +983,62 @@ async function runTransfers(){
   }
  }finally{runningTransfers=false;}
 }
+function onProfileLine(line){
+ const parts=line.split('|'),type=parts[1],mode=parts[2];
+ if(type==='ACTIVE'||type==='ROLLED_BACK'){
+   if(['LOW','BALANCED','MAX'].includes(mode))currentProfile=mode;
+   const values={};for(const field of parts.slice(3)){
+     const i=field.indexOf('=');if(i>0)values[field.slice(0,i)]=field.slice(i+1);
+   }
+   const sf=Number(values.SF),bw=Number(values.BW),power=Number(values.TX_DBM);
+   if(Number.isInteger(sf)&&sf>=7&&sf<=12)profileRadio.sf=sf;
+   if([125000,250000,500000].includes(bw))profileRadio.bw=bw;
+   if(Number.isInteger(power)&&power>=2&&power<=17)profileRadio.power=power;
+   profileTransition=false;
+   updateLinkBadge();
+   if(type==='ROLLED_BACK')toast('Radio profile change rolled back; both nodes must be reachable.');
+   else if(verified)toast(`LoRa profile active: ${profileLabels[currentProfile]}`);
+ }else if(['NEGOTIATING','PEER_REQUEST','AGREED','VERIFYING','TRANSITION'].includes(type)){
+   profileTransition=true;
+   if(type==='NEGOTIATING')toast(`Negotiating ${profileLabels[mode]||mode} with the peer…`);
+ }else if(type==='ERROR'||type==='TIMEOUT'){
+   profileTransition=false;
+   toast(`LoRa profile: ${parts.slice(2).join(' ')||'request failed'}`);
+ }
+}
+async function requestProfileChange(mode){
+ if(!['LOW','BALANCED','MAX'].includes(mode))return;
+ if(!verified||!writer||!secretKey){toast('Connect and pair the ESP32 first');return;}
+ if(profileTransition){toast('LoRa profile negotiation already running');return;}
+ if(speedDiagnostics.busy){toast('Cancel the speed test before changing mode');return;}
+ const busy=Boolean(transferQueue.length||activeTransfer||pendingRadio()||rfScheduler.depth||urgentReceipts.length);
+ let force=false;
+ if(busy){
+   if(!confirm('There are unfinished messages or receipts. Force a profile change? Their delivery may remain unconfirmed.'))return;
+   force=true;
+   if(pendingRadio())failPendingRadio(Error('Manual LoRa profile change; delivery unconfirmed'));
+   rfScheduler.cancelQueued('Manual LoRa profile change');
+   for(const job of transferQueue.splice(0))if(job.record)void setState(job.record,'failed','Profile change: delivery unconfirmed');
+ }
+ try{await writeLine(`PROFILE ${mode}${force?' FORCE':''}`);profileTransition=true;toast('Profile request sent to ESP32');}
+ catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
+}
+function showProfileDialog(){showDialog('Manual LoRa radio profiles',body=>{
+ body.append(el('p','','Choose a mode manually. One node sends an authenticated request using the CURRENT radio profile; the other node follows only for this user-requested switch. If the new link cannot be confirmed, the firmware rolls back. Never use mismatched v1.2 firmware on the other node.'));
+ const entries=[
+  ['LOW','Low Power / Fast','SF7 · 500 kHz · +2 dBm · shortest airtime, lower range/power'],
+  ['BALANCED','Balanced','SF7 · 250 kHz · +10 dBm · default on both nodes'],
+  ['MAX','Max Power / Range','SF9 · 125 kHz · +17 dBm · slower but greater sensitivity/range']
+ ];
+ for(const [value,name,details] of entries){
+   const row=el('div','profile-mode-choice');
+   const b=el('button','quiet-button',`${name}${currentProfile===value?' ✓':''}`);
+   const note=el('p','',details);b.disabled=profileTransition||!verified;
+   b.onclick=()=>{closeDialog();void requestProfileChange(value);};row.append(b,note);body.append(row);
+ }
+ body.append(el('p','','+17 dBm is the maximum standard PA_BOOST setting used here, not an unrestricted +20 dBm chip setting. Your Ra-02 supply and local RF rules still limit usable power. No automatic rate switching.'));
+ const diag=el('button','quiet-button','USB diagnostics');diag.onclick=diagnoseUsb;body.append(diag);
+});}
 function parseLine(raw){const s=raw.trim();if(!s)return;
  if(diagnosticLine(s))return;
  // Record serial input for diagnosis, without exposing the 256-bit pairing key.
@@ -995,6 +1057,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  if(s==='KEYSTORED'){finishNodeKeyRequest('set',true);return;}
  if(s.startsWith('KEYERROR|')){finishNodeKeyRequest('set',null,Error(s.slice(9)));return;}
 
+ if(s.startsWith('PROFILE|')){onProfileLine(s);return;}
  if(s.startsWith('LINK|')){
   const parts=s.split('|'),fields={};for(const bit of parts.slice(2)){
    const j=bit.indexOf('=');if(j>0)fields[bit.slice(0,j)]=bit.slice(j+1);
@@ -1008,11 +1071,11 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.2.0 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.5.0 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
- if(s.startsWith('ERROR|')){const reason=s.slice(6);if(pendingRadio()&&/^(QUEUE_FULL|EVENT_QUEUE_FULL|INVALID_HEX_OR_LENGTH|LINE_TOO_LONG|UNKNOWN_COMMAND)/.test(reason)){const slot=[...radioByHex.values()].findLast(x=>!x.wire)||[...radioByHex.values()].at(-1);if(slot){clearSlot(slot);slot.reject(Error('ESP32: '+reason));}}toast('ESP32: '+reason);}
+ if(s.startsWith('ERROR|')){const reason=s.slice(6);if(pendingRadio()&&/^(QUEUE_FULL|EVENT_QUEUE_FULL|PROFILE_SWITCH_IN_PROGRESS|INVALID_HEX_OR_LENGTH|LINE_TOO_LONG|UNKNOWN_COMMAND)/.test(reason)){const slot=[...radioByHex.values()].findLast(x=>!x.wire)||[...radioByHex.values()].at(-1);if(slot){clearSlot(slot);slot.reject(Error('ESP32: '+reason));}}toast('ESP32: '+reason);}
 }
 function consume(data){serialBuffer+=new TextDecoder().decode(data);let i;while((i=serialBuffer.indexOf('\n'))>=0){parseLine(serialBuffer.slice(0,i));serialBuffer=serialBuffer.slice(i+1);}if(serialBuffer.length>8192)serialBuffer='';}
 async function readLoop(){try{while(port?.readable&&!closing){reader=port.readable.getReader();try{while(!closing){const {value,done}=await reader.read();if(done)break;if(value)consume(value);}}finally{reader.releaseLock();reader=null;}if(!closing&&port?.readable)await wait(100);}}catch(e){if(!closing)toast('Serial disconnected: '+e.message);}finally{if(!closing){readPromise=null;void disconnect();}}}
@@ -1059,8 +1122,10 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
   readPromise=null;serialBuffer='';verified=false;port=null;writer=null;clearUsbHint();if(pendingRadio())failPendingRadio(Error('Disconnected'));if(activeTransfer?.record)void setState(activeTransfer.record,'failed','Disconnected');
  transferQueue=[];runningTransfers=false;
   if(receiptBatchTimer!==null){clearTimeout(receiptBatchTimer);receiptBatchTimer=null;}
-  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();localMac=null;secretKey=null;radioTelemetry.available=false;refreshStatus();closing=false;}}
-async function sendText(){const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
+  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
+async function sendText(){
+ if(profileTransition){toast('Wait for the LoRa profile switch to finish');return;}
+const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
  if(countChars(text)>MAX_CHARS){toast('Maximum 500 characters per text message.');return;}
  const r={id:P.newId(),kind:'text',dir:'out',ts:Date.now(),text,status:'sending',progress:0};await appendRecord(r);input.value='';updateByteCount();
  if(transferQueue.length>=MAX_TEXT_QUEUE){await setState(r,'failed','Local text queue is full; retry once it drains');toast('LoRa text queue full; let pending messages finish');return;}
@@ -1276,10 +1341,10 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.2.0'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.5.0-rc.1'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
-  ['Profile','SF7 / 125 kHz / CR 4/5 / TX 10 dBm'],
+  ['Profile',`${profileLabels[currentProfile]}: SF${profileRadio.sf} / ${profileRadio.bw/1000} kHz / CR 4/5 / TX ${profileRadio.power} dBm`],
   ['Peer',radioTelemetry.peer],
   ['Radio RSSI',radioTelemetry.rssi===null?'Unknown':radioTelemetry.rssi+' dBm'],
   ['Security',secretKey?'AES-256-GCM key loaded from ESP32 NVS':'Not paired'],
@@ -1289,10 +1354,10 @@ function showInfo(){showDialog('LoRa chat information',body=>{
  body.append(el('p','','Single gray tick = SX1278 TxDone for all fragments. Double gray = authenticated encrypted delivery receipt. Double blue = authenticated read receipt. A timeout means unconfirmed, not definitely undelivered.'));
  });}
 function showSettings(){showDialog('LoRa settings',body=>{
- body.append(el('p','','OffGrid Messenger LoRa v1.2: fixed 433 MHz / SF7 / 125 kHz / 4/5 / 10 dBm. Wi-Fi and ESP-NOW are not started. Photos, voice and adjustable radio profiles are intentionally disabled until their own releases.'));
+ body.append(el('p','','OffGrid Messenger LoRa v1.5: three manually selected 433 MHz radio profiles, authenticated peer coordination, Wi-Fi/ESP-NOW disabled. Photos, voice and automatic RF adaptation remain disabled.'));
  const buttons=el('div','settings-actions');
  for(const [name,action] of [['Rename contact',showRename],['Node pairing key',showPairing],
-   ['USB diagnostics',diagnoseUsb],['LoRa speed test',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){
+   ['USB diagnostics',diagnoseUsb],['Manual LoRa profiles',showProfileDialog],['LoRa speed test',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){
   const button=el('button','quiet-button',name);button.onclick=action;buttons.append(button);
  }
  body.append(buttons);

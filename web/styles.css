@@ -389,3 +389,8 @@ body.light .notification-button.notifications-active .notification-dot{box-shado
 
 /* LoRa v1.0 explicitly does not advertise unsupported media sending. */
 #attachments, #voiceButton { display: none !important; }
+
+/* LoRa v1.5 manual mode selection */
+.profile-mode-choice { border:1px solid rgba(128,160,165,.25);border-radius:10px;padding:8px 10px;margin:9px 0; }
+.profile-mode-choice button {width:100%;text-align:left;}
+.profile-mode-choice p {margin:6px 0 2px;font-size:.84rem;opacity:.76;}
