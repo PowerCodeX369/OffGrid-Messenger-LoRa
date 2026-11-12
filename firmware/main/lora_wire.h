@@ -1,5 +1,5 @@
 /*
- * OffGrid Messenger LoRa v1.0: OGM2-compatible, authenticated SX1278 framing.
+ * OffGrid Messenger LoRa v1.1: OGM2-compatible, authenticated SX1278 framing.
  * This header has NO ESP-IDF dependencies, so it can be checked on a host.
  * The independent browser OGM4 envelope provides AES-GCM confidentiality.
  */
@@ -48,10 +48,12 @@ static inline bool og_wire_valid(const og_frame_t *f, size_t n) {
 static inline size_t og_wire_length(const og_frame_t *f) {
     return OG_FRAME_HDR_BYTES + (f ? f->length : 0);
 }
-/* At SF7/BW125 payload ACK airtime is ~70 ms. The sender waits for a
- * radio ACK after TxDone, not while it is still transmitting its own data. */
+/* SF7/BW125 fixed v1.1 profile. Small HMAC ACK frame ~82 ms airtime.
+ * Budget turnaround + receiver processing + RF airtime + scheduling margin,
+ * not a multi-second generic ACK timeout. Time starts AFTER TxDone.
+ * Lost packets get bounded backoff. */
 static inline uint32_t og_ack_wait_ms(unsigned attempt) {
     if (attempt > 5) attempt = 5;
-    return 650u + attempt * 300u;
+    return 460u + attempt * 180u;
 }
 #endif
