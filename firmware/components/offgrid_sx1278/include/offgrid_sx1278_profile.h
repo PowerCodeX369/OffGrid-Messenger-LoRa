@@ -13,6 +13,7 @@
 typedef enum {
     OFFGRID_SX1278_BW_125_KHZ = 125000,
     OFFGRID_SX1278_BW_250_KHZ = 250000,
+    OFFGRID_SX1278_BW_500_KHZ = 500000,
 } offgrid_sx1278_bandwidth_t;
 
 typedef struct {

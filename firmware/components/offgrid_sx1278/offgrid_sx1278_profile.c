@@ -7,7 +7,8 @@ bool offgrid_sx1278_profile_valid(const offgrid_sx1278_profile_t *p)
     return p != NULL &&
            p->frequency_hz >= 410000000U && p->frequency_hz <= 525000000U &&
            (p->bandwidth == OFFGRID_SX1278_BW_125_KHZ ||
-            p->bandwidth == OFFGRID_SX1278_BW_250_KHZ) &&
+            p->bandwidth == OFFGRID_SX1278_BW_250_KHZ ||
+            p->bandwidth == OFFGRID_SX1278_BW_500_KHZ) &&
            p->spreading_factor >= 7U && p->spreading_factor <= 12U &&
            p->coding_denominator >= 5U && p->coding_denominator <= 8U &&
            p->tx_power_dbm >= 2 && p->tx_power_dbm <= 17 &&
@@ -26,8 +27,8 @@ bool offgrid_sx1278_make_registers(const offgrid_sx1278_profile_t *p,
                          32000000ULL);
 
     /* RegModemConfig1: bandwidth [7:4], coding rate [3:1], explicit header. */
-    const uint8_t bw_code = (p->bandwidth == OFFGRID_SX1278_BW_250_KHZ)
-                                ? 0x80U : 0x70U;
+    const uint8_t bw_code = (p->bandwidth == OFFGRID_SX1278_BW_500_KHZ) ? 0x90U :
+                            (p->bandwidth == OFFGRID_SX1278_BW_250_KHZ) ? 0x80U : 0x70U;
     r->modem_config1 = (uint8_t)(bw_code | ((p->coding_denominator - 4U) << 1U));
     /* RegModemConfig2: spreading factor [7:4], payload CRC enabled [2]. */
     r->modem_config2 = (uint8_t)((p->spreading_factor << 4U) | 0x04U);
