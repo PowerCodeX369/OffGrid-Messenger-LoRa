@@ -1,0 +1,17 @@
+name: LoRa host regression checks
+on:
+  push:
+  pull_request:
+jobs:
+  host:
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '22'
+      - name: Portable C frame/profile + web crypto + source boundaries
+        run: firmware/tests/run-host-tests.sh
+      - name: Git and manifest check
+        run: git diff --check && git fsck --no-reflogs
+# Intentionally not labeled a hardware or full ESP-IDF compile job.
