@@ -33,5 +33,6 @@ node firmware/tests/test-diagnostic-protocol.cjs
 node firmware/tests/test-lora-delivery.cjs
 node firmware/tests/test-lora-scheduler.cjs
 node firmware/tests/test-lora-receipts.cjs
+python3 tests/test_rc2_send_path.py
 python3 tests/test_boundaries.py
 if command -v clang >/dev/null 2>&1; then firmware/tests/run-syntax-checks.sh; fi

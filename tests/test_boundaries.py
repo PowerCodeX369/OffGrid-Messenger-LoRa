@@ -25,7 +25,10 @@ assert "$('attachments').disabled=true" in web and "$('voiceButton').disabled=tr
 assert 'urgentReceipts' in web and 'runUrgentReceipts' in web
 assert 'FragmentScheduler' in web and 'rfScheduler.submit' in web
 assert 'FLOW=2' in main and 'FLOW=2' in web
-assert 'OG_DATA_CAD_TIMEOUT_MS' in main and 'og_busy_backoff_ms' in main
+# rc.2 rolls back the rc.1 pre-TX CAD gate, preserving the v1.1 TX path.
+service=main[main.index('static void service_queues(void)'):main.index('static void radio_loop(void *arg)')]
+assert 'offgrid_sx1278_cad(' not in service and 'offgrid_sx1278_rx_busy(' not in service
+assert 'esp_err_t status=tx(&p->frame);' in service
 assert "P.types.probe,P.types.probeAck" in web
 assert 'P.types.receiptBatch' in web and 'flushReceiptBatch' in web
 assert 'LoRa speed test' in web
@@ -39,7 +42,7 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.2.0-rc.1" in main and "1.2.0-lora" in web
+assert "1.2.0-rc.2" in main and "1.2.0-lora" in web
 # Source copied to Android is truly unchanged against the imported ESP-NOW
 # repository. The pinned reference hash list is checked during packaging.
 assert (root/'docs/ANDROID_FROZEN_SHA256.txt').exists()

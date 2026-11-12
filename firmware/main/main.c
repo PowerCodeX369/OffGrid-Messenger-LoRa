@@ -1,5 +1,5 @@
 /*
- * OffGrid Messenger LoRa v1.2.0-rc.1 / ESP32-C3 + SX1278 Ra-02
+ * OffGrid Messenger LoRa v1.2.0-rc.2 / ESP32-C3 + SX1278 Ra-02
  *
  * No esp_wifi_init, no esp_now_init, no Wi-Fi event loop, no Wi-Fi tasks.
  * BLE (NimBLE) and native USB continue to serve the existing OGM4 client.
@@ -51,7 +51,6 @@
 #define OG_PENDING 8
 #define OG_RX_HISTORY 32
 #define OG_CTRL_QUEUE 18
-#define OG_DATA_CAD_TIMEOUT_MS 35
 #define OG_SERIAL_BUF 512
 #define OG_PEER_STALE_MS 30000
 #define OG_TX_ATTEMPTS 4
@@ -115,7 +114,6 @@ static bool radio_key_ready;
 static psa_key_id_t radio_psa_id;
 static uint32_t stat_tx_done,stat_appack,stat_tx_errors,stat_busy_cad;
 static offgrid_sx1278_t *sx;
-static uint32_t busy_cad_streak;
 
 static int64_t millis(void) { return esp_timer_get_time()/1000LL; }
 static void mac_text(const uint8_t m[6], char out[18]) {
@@ -278,7 +276,7 @@ static esp_err_t tx(const og_frame_t *f) {
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.2.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.2.0-rc.2|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -463,23 +461,14 @@ static void service_queues(void) {
         output("RETRY|%" PRIu32 "|%" PRIu32 "|%u\n",
                p->frame.session,p->frame.id,(unsigned)(p->tries+1));
     }
-    /* Detect an already-running LoRa transmission before sending another
-     * DATA frame. CAD is best-effort and stays off for immediate radio ACKs.
-     * Busy-channel deferrals never consume a retry attempt. */
-    bool busy=false;
-    esp_err_t cad=offgrid_sx1278_rx_busy(sx,&busy);
-    /* Only run a short CAD if the continuous receiver has not detected a
-     * preamble/ongoing packet. CAD itself temporarily stops normal RX. */
-    if(cad==ESP_OK && !busy)cad=offgrid_sx1278_cad(sx,&busy,OG_DATA_CAD_TIMEOUT_MS);
-    if(cad==ESP_OK && busy){
-        stat_busy_cad++;busy_cad_streak++;
-        p->due_ms=millis()+og_busy_backoff_ms(esp_random(),busy_cad_streak,own_mac[5]);
-        return;
-    }
-    if(cad!=ESP_OK){
-        output("RADIO_DIAG|CAD_ERROR|%s\n",esp_err_to_name(cad));
-    }
-    busy_cad_streak=0;
+    /* v1.2.0-rc.2: do NOT call CAD on the active continuous receiver.
+     * The v1.2 rc.1 pre-TX modem-status/CAD gate could defer a pending
+     * packet indefinitely, even when the underlying v1.1 TX path worked.
+     * Revert to the known-working v1.1 send path while keeping the v1.2
+     * browser serialization, ACK priority and encrypted receipt batching.
+     * The SX1278 owner task still transmits at most one unacknowledged
+     * DATA frame at a time; delivery is not asserted without a receipt.
+     */
     esp_err_t status=tx(&p->frame);
     p->tries++;
     if(status==ESP_OK){
@@ -492,11 +481,10 @@ static void service_queues(void) {
                    p->frame.session,p->frame.id,p->tx_at_ms);
         }
     }
-    /* After a failed radio ACK, spread retries across >one LoRa packet's
-     * airtime. Two nodes transmitting simultaneously must not repeatedly
-     * collide on identical retry schedules. First attempt stays responsive. */
-    p->due_ms=millis()+og_ack_wait_ms(p->tries)+
-              og_air_retry_jitter_ms(esp_random(),p->tries,own_mac[5]);
+    /* Restore the tested v1.1 retransmission policy, without the new CAD
+     * state changes. Packet retries are still bounded and jittered. */
+    const uint32_t contention=p->tries<=1?120u:180u*(uint32_t)p->tries;
+    p->due_ms=millis()+og_ack_wait_ms(p->tries)+(esp_random()%contention);
     if(status!=ESP_OK && p->tries>=OG_TX_ATTEMPTS){
         output("FAILED|%" PRIu32 "|%" PRIu32 "|RADIO_TX_ERROR\n",
                p->frame.session,p->frame.id);
@@ -639,7 +627,7 @@ void app_main(void) {
 #else
     puts("USBMODE|LEGACY");
 #endif
-    puts("BOOT|OffGrid Messenger LoRa v1.2.0-rc.1 (Wi-Fi and ESP-NOW excluded)");
+    puts("BOOT|OffGrid Messenger LoRa v1.2.0-rc.2 (Wi-Fi and ESP-NOW excluded)");
     esp_err_t e=nvs_flash_init();
     if(e==ESP_ERR_NVS_NO_FREE_PAGES || e==ESP_ERR_NVS_NEW_VERSION_FOUND){
         /* This is a standard ESP-IDF NVS recovery path. It erases NVS only
