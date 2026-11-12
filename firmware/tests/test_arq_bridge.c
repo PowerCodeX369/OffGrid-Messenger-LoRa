@@ -100,6 +100,15 @@ static void scenario(size_t size,bool drop_data,bool drop_ack,bool drop_last){
                a->b.tx_frames,a->b.ack_timeouts,a->failed);
     assert(a->confirmed==1 && a->sent==1 && b->rx_count==1 && a->failed==0);
     assert(b->rx_bytes==size && !memcmp(bytes,b->received,size));
+    if(size==1024 && !drop_data && !drop_ack){
+        /* Five 224-byte fragments now fit a single six-frame window.
+         * One bitmap ACK replaces the old 4+1 two-ACK exchange. */
+        assert(a->b.tx.fragments==5);
+        assert(a->b.tx.window==6);
+        assert(b->b.bitmap_acks_tx==1);
+        assert(a->b.bitmap_acks_rx==1);
+    }
+    assert(a->b.next_tx_at>=a->b.tx_last_at+OG_BRIDGE_INTERFRAME_GUARD_MS);
     assert(!drop_data || (a->dropped_data && a->b.retransmits>0));
     assert(!drop_ack || (b->dropped_ack && a->b.ack_timeouts>0));
     free(bytes);free(a);free(b);

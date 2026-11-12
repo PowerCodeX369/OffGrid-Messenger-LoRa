@@ -42,7 +42,7 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.6.0-rc.1" in main and "1.6.0-rc1-lora" in web
+assert "1.6.1-rc.1" in main and "1.6.1-rc1-lora" in web
 assert 'PROFILES=4' in main and 'PROFILES=4' in web
 assert 'ARQ=1' in main and 'ARQ=1' in web
 assert 'BULKBEGIN' in main and 'BulkLink' in web
