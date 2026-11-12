@@ -9,3 +9,9 @@
 - **Limitations:** recent replay deduplication, no fully audited persistent replay window, no secure element, no external security audit, no measured two-board v1.5 RF/profile stress test. The mode-change protocol is best-effort with timed rollback, not an atomic distributed commit or an emergency communications guarantee.
 
 Please do not include shared pairing keys in bug reports. Report security vulnerabilities privately.
+
+## v1.6 integrated selective-repeat security
+
+AES-256-GCM OGM4 application encryption, local history authentication, and encrypted delivered/read receipts remain browser-owned. The new RF DATA and bitmap ACK frame format is authenticated with a **mandatory** truncated 128-bit HMAC-SHA256 from the existing domain-separated LoRa pairing key. Any unauthenticated RF data is rejected before state mutation. A radio bitmap ACK alone **does not** create an application delivered/read tick. USB CRC32 detects staging errors only and provides no secrecy or authenticity. The authenticated v1.6 capability control frame is required to avoid sending incompatible data to v1.5 devices.
+
+The +18 dBm path is explicitly gated by operator action over physical USB on each board; reboot clears it. The experimental +22 dBm request is not available. Future security work includes persistent replay protection, independent crypto review and hardware power/duty-cycle validation; source tests do not establish end-to-end field security. Never upload `KEYDATA` or pairing keys in bug reports.

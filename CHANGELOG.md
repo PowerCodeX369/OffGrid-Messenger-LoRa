@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.0-rc.1] — 2026-11-13
+
+**Complete firmware + web integration of selective-repeat authenticated LoRa transport. Hardware acceptance pending.**
+
+- Replace stop-and-wait 160-byte radio fragments with **224-byte ciphertext fragments** (up to 254-byte on-air packets including frame header and 16-byte radio HMAC), four-fragment burst window and authenticated 32-bit received-fragment bitmap ACK. Retransmit only missing fragments; bound per-fragment retries and transfer size (7168 bytes). The existing OGM4 AES-256-GCM message and receipt layers remain intact.
+- Add `offgrid_arq` as an ESP-IDF component with full `og_arq_bridge.*` radio-task integration, USB bulk ciphertext staging and an independent v1.6 web client (`lora_bulk.js`). No longer require a browser/USB round trip after each RF fragment. Introduce authenticated OGM2 ARQ capability announcement to avoid silent mismatches with v1.5 firmware.
+- Preserve manual three-mode negotiation and rollback. Fast SF7/BW500 and Max SF9/BW125 now request **nominal +18 dBm** via the SX1278 high PA_DAC path, **only after each physical USB operator explicitly verifies hardware and powers on this capability**; Balanced remains +10 dBm. Fourth **Experimental +22 dBm** selector is shown but disabled and firmware rejects it as unsupported. No automatic switching.
+- Keep `BULKSENT` TxDone single tick distinct from `BULKCONFIRMED` authenticated RF bitmap and encrypted OGM4 delivered/read double-gray/blue ticks. Retain full browser chat, BLE firmware, AES-256-GCM local history, priority encrypted receipts and speed benchmark. Photo/voice/video remain disabled and Android files unchanged.
+- Add host bridge two-node loss-injection tests (1KB, 4KB, 7168-byte transfers, lost last fragments and ACKs), browser bulk staging/CRC tests, profile/power register tests, sanitizers and source-boundary tests. Known BLE transport and physical-radio limitations documented.
+- **Source tested only:** A full ESP-IDF 6.1 compile and actual two-board speed/field reliability tests have **not** been performed. Do not treat theoretical airtime estimates as observed throughput. See [v1.6 integration/acceptance](docs/V1_6_0_ARQ_INTEGRATION.md).
+
+
 ## [1.5.0-rc.1] — 2026-11-13
 
 **Manual three-mode LoRa radio candidate; v1.3/v1.4 were not published.**

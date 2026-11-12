@@ -1,5 +1,9 @@
-# Contributing
+# Contributing to OffGrid Messenger LoRa
 
-OffGrid Messenger LoRa is a separate project from the original ESP-NOW implementation. Do not introduce Wi-Fi/ESP-NOW code or change `android/` before v2.0. Keep all P2P traffic authenticated; preserve OGM4 AES-GCM semantics. Every patch should contain a focused source change, a host regression if feasible, a clear changelog entry, and an explicit note whether ESP-IDF and radio hardware were tested.
+The `main` Git branch is the authoritative integrated repository, with historical annotated tags from v1.0.0 onward. This is a **separate LoRa project**, not the working ESP-NOW repository. Use focused commits, meaningful commit subjects and a changelog entry. Git attribution should reflect actual human contributors. Maintainer: PowerCodeX.
 
-For local checks: `firmware/tests/run-host-tests.sh`. Test with an antenna and stable regulated 3.3 V. When reporting failures, share the **first `error:` build line and surrounding output**, or USB `READY`, `RADIO`, `LINK`, `SENT`, `RETRY`, `FAILED`, `DELIVERED` lines. Redact `KEYDATA` and all pairing secrets.
+Do not add Wi-Fi/ESP-NOW startup calls, change the frozen `android/` tree ahead of the final universal-app release, bypass AES-256-GCM, disable mandatory HMAC or substitute a radio ACK for a verified delivered/read receipt. Keep a bounded ciphertext buffer and a single SX1278 SPI owner; every profile change must remain manual and peer authenticated. **+22 dBm must remain unavailable on SX1278.** Tests cannot replace hardware validation.
+
+Run `bash firmware/tests/run-host-tests.sh` before proposing a change. Firmware changes additionally need a full ESP-IDF 6.1 `idf.py build` on an ESP32-C3 environment; browser changes need the included Chromium UI tests when possible. Provide structured diagnostics including profile, retries, ACK counters and exact test payload size. Mark what was actually tested in the PR: host simulator, real board build, two-board RF test, BLE, or range test.
+
+For pull requests explain the protocol compatibility/rollback plan, especially for changes to `og_sr.h`, `og_arq_bridge.*`, `main.c` and `web/lora_bulk.js`. Attach no real pairing keys (`KEYDATA`), private NVS dumps or exact device identifiers. Do not publish a performance claim without reproducible real hardware measurements. See [v1.6 acceptance](docs/V1_6_0_ARQ_INTEGRATION.md).
