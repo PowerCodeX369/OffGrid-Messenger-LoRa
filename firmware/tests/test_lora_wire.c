@@ -17,6 +17,8 @@ int main(void) {
     f.length=0;f.type=OG_TYPE_RADIO_ACK;assert(og_wire_valid(&f,OG_FRAME_HDR_BYTES));
     f.type=77;assert(!og_wire_valid(&f,OG_FRAME_HDR_BYTES));
     assert(og_ack_wait_ms(0)>=400);
+    assert(og_ack_wait_ms(1)<800);
+    assert(og_ack_wait_ms(4)<1500);
     assert(og_ack_wait_ms(1)<og_ack_wait_ms(3));
     puts("PASS: LoRa frame sizes, text/control validation and airtime-aware ACK wait");
     return 0;

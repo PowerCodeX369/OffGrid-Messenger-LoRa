@@ -24,7 +24,16 @@ assert "writeLine('RATE '" not in web
 assert "$('attachments').disabled=true" in web and "$('voiceButton').disabled=true" in web
 assert 'urgentReceipts' in web and 'runUrgentReceipts' in web
 assert 'BINCAP|0|0' in ble and 'CAPS|FAMILY=LORA' in ble
-assert 'OG_APP_WAIT_MS' in main and 'OG_TX_ATTEMPTS' in main
+assert 'OG_TX_ATTEMPTS' in main and 'RADIOACK|' in main
+assert 'CTRLHEX ' in main and 'CMD_URGENT' in main
+assert 'OG_APP_WAIT_MS' not in main and 'OG_TYPE_RECEIPT_QUERY' not in main
+assert 'offgrid_sx1278_send' in main and 'radio_hmac' in main
+assert 'static void service_queues' in main and 'choose_pending' in main
+assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
+assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
+assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
+assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
+assert "1.1.0" in main and "1.1.0-lora" in web
 # Source copied to Android is truly unchanged against the imported ESP-NOW
 # repository. The pinned reference hash list is checked during packaging.
 assert (root/'docs/ANDROID_FROZEN_SHA256.txt').exists()
