@@ -6,10 +6,11 @@
   <meta name="theme-color" content="#101b21">
   <title>OffGrid Messenger LoRa</title>
   <link rel="icon" href="logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=lora100">
-  <script src="protocol.js?v=lora100" defer></script>
-  <script src="adaptive.js?v=lora100" defer></script>
-  <script src="app.js?v=lora100" defer></script>
+  <link rel="stylesheet" href="styles.css?v=lora110">
+  <script src="protocol.js?v=lora110" defer></script>
+  <script src="adaptive.js?v=lora110" defer></script>
+  <script src="lora_delivery.js?v=lora110" defer></script>
+  <script src="app.js?v=lora110" defer></script>
 </head>
 <body>
 <div class="app" id="app">
@@ -38,7 +39,7 @@
         <span id="usbDiagnosticsText">Waiting for firmware response…</span>
         <button class="usb-diagnostics-btn" id="usbDiagnosticsButton" type="button">Diagnostics</button>
       </div>
-      <div class="link-health" title="Link profile uses acknowledgment latency and retries, not physical distance"><span class="link-health-dot"></span><span id="linkModeLabel">Auto · learning link quality</span></div>
+      <div class="link-health" title="Link profile uses acknowledgment latency and retries, not physical distance"><span class="link-health-dot"></span><span id="linkModeLabel">Fixed LoRa SF7 · 125 kHz</span></div>
       <button class="security-line" id="securityButton" type="button"><span id="securityIcon">♢</span><span id="securityLabel">Connect to configure encryption</span><span class="security-chevron">›</span></button>
     </div>
     <div class="chats-heading"><h2>Chats</h2><span class="tiny-badge unread-badge" id="unreadBadge" hidden aria-label="Unread messages">0</span></div>

@@ -1,9 +1,9 @@
 'use strict';
-/* OffGrid Messenger LoRa v1.0.0: encrypted text over SX1278 / USB Serial.
+/* OffGrid Messenger LoRa v1.1.0: encrypted text over SX1278 / USB Serial.
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=96*1024,MAX_VOICE_MS=P.VOICE_MAX_MS,STORE='OffGridMessengerV14';
-const APP_VERSION='1.0.0-lora';
+const APP_VERSION='1.1.0-lora';
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
 const stateRank={sending:0,queued:0,sent:1,failed:1,delivered:2,read:3};
@@ -52,6 +52,7 @@ let linkPreference='auto';
 const photoFlow=new globalThis.OffGridAdaptive.PhotoFlowController();
 let adaptivePhotos=true;
 let queuedReceipts=new Set(),pendingReads=new Set(),theme='dark';
+const receiptWatchdogs=new Map();
 let imageMode='hq';
 /* Browser-only desktop notifications. Consent requires an explicit user click.
    No keys or private message content are ever stored in notification settings. */
@@ -108,7 +109,7 @@ function diagPrint(message){
 }
 function showSpeedDiagnostics(){
  showDialog('LoRa diagnostics',body=>{
-  body.append(el('p','','SX1278 fixed profile: 433 MHz · SF7 · 125 kHz · 4/5 · 10 dBm. Transfer benchmarks and media modes are not supported in v1.0.0. Use USB diagnostics to inspect radio and application ACK counters.'));
+  body.append(el('p','','SX1278 fixed profile: 433 MHz · SF7 · 125 kHz · 4/5 · 10 dBm. Transfer benchmarks and media modes are not supported in v1.1.0. Use USB diagnostics to inspect radio and application ACK counters.'));
   const d=el('button','primary-button','Open USB diagnostics');d.onclick=diagnoseUsb;body.append(d);
  });
 }
@@ -207,7 +208,10 @@ const dbPut=(store,value)=>txRequest(store,'readwrite',st=>st.put(value));
 const dbDelete=(store,key)=>txRequest(store,'readwrite',st=>st.delete(key));
 const listStored=()=>txRequest('messages','readonly',st=>st.index('owner').getAll(IDBKeyRange.only(macKey())));
 async function wipeStored(){const rows=await listStored();await new Promise((resolve,reject)=>{const tx=db.transaction('messages','readwrite'),st=tx.objectStore('messages');for(const row of rows)st.delete(row.pk);tx.oncomplete=resolve;tx.onerror=()=>reject(tx.error);});}
-function chosenWindow(){return 1;} // v1.0: one text fragment in flight.
+/* Browser may PREPARE three text fragments, while firmware serializes RF
+ * frames around authenticated radio-ACK windows. This is pipelining, not
+ * simultaneous on-air TX (SX1278 is half duplex). */
+function chosenWindow(job){return job && job.kind==='text' && !job.control ? 3 : 1;}
 
 function photoBudget(){
  if(imageMode==='lossless')return MAX_PHOTO;
@@ -482,11 +486,30 @@ async function markVoicePlayed(id){
  if(r.dir==='in'&&!r.playedSent&&verified&&secretKey)enqueueReceipt('played',r.id);
 }
 async function setState(r,status,error=''){
- if(!r)return;const prior=r.status||'sending';if(prior==='read'&&status!=='read')return;if(prior==='delivered'&&status==='failed')return;
+ if(!r)return;
+ if(['delivered','read'].includes(status)){
+  const t=receiptWatchdogs.get(r.id);
+  if(t){clearTimeout(t);receiptWatchdogs.delete(r.id);}
+ }
+ const prior=r.status||'sending';if(prior==='read'&&status!=='read')return;if(prior==='delivered'&&status==='failed')return;
  if(status!=='failed'&&(stateRank[status]??0)<(stateRank[prior]??0))return;
  r.status=status;r.error=error;r.progress=status==='sending'?r.progress:0;updateBubble(r);try{await storeStatus(r);}catch(e){console.warn('Status save failed',e);}
 }
-async function setProgress(r,pct){if(!r||['delivered','read'].includes(r.status))return;r.status='sending';r.progress=Math.max(0,Math.min(100,pct));updateBubble(r);}
+async function setProgress(r,pct){if(!r||['sent','delivered','read','failed'].includes(r.status))return;r.status='sending';r.progress=Math.max(0,Math.min(100,pct));updateBubble(r);}
+/* Radio TxDone is ONE gray tick; only an authenticated OGM4 delivered
+ * receipt creates TWO gray ticks. A lost encrypted receipt must leave an
+ * explicit unconfirmed result rather than inventing successful delivery. */
+function watchDeliveryReceipt(r,fragments){
+ if(!r || !verified || ['delivered','read'].includes(r.status))return;
+ const old=receiptWatchdogs.get(r.id);if(old)clearTimeout(old);
+ const deadline=globalThis.OffGridLoRaDelivery.receiptTimeoutMs(fragments);
+ receiptWatchdogs.set(r.id,setTimeout(()=>{
+  receiptWatchdogs.delete(r.id);
+  if(verified && !['delivered','read'].includes(r.status)){
+   void setState(r,'failed','Encrypted delivery receipt unconfirmed; recipient may already have it');
+  }
+ },deadline));
+}
 function writeLine(line){const task=writeChain.then(async()=>{if(!writer)throw Error('USB not connected');await writer.write(encoder.encode(line+'\n'));});writeChain=task.catch(()=>{});return task;}
 /* KEYGET/KEYSET are local USB commands. Raw key material is never saved in
    IndexedDB/localStorage. The CryptoKey only lives in this tab's RAM. */
@@ -580,25 +603,49 @@ function clearSelectiveAcks(){
  sackGroups.clear();
 }
 async function processRx(mac,session,packetId,rawHex){
- let fr;try{if(!/^[0-9A-Fa-f]{40,456}$/.test(rawHex))return;fr=P.parseFrame(P.unhex(rawHex));}catch{return;}if(!fr||!secretKey||!verified)return;
+ let fr;
+ try{
+  if(!/^[0-9A-Fa-f]{40,456}$/.test(rawHex))return;
+  fr=P.parseFrame(P.unhex(rawHex));
+ }catch{return;}
+ if(!fr||!secretKey||!verified)return;
  const key=incomingKey(mac,session,fr.transferId);
- /* APPACK confirms an assembled structurally valid fragment to the MCU.
-    Separate AES-GCM-delivered/read receipts follow after decryption. */
- if(fr.bulk && speedDiagnostics.sackCapable)queueSelectiveAck(mac,session,packetId);
- else writeLine(`APPACK ${mac} ${session} ${packetId}`).catch(()=>{});
- if(recentTransfers.has(key))return;
+ /* A duplicate of an already decrypted transfer is safe to APPACK again.
+  * Do NOT acknowledge unverified encrypted data to the application layer. */
+ if(recentTransfers.has(key)){
+  void writeLine(`APPACK ${mac} ${session} ${packetId}`).catch(()=>{});
+  return;
+ }
  let state=incoming.get(key);
- if(!state){if(incoming.size>=5){const oldest=incoming.keys().next().value;incoming.delete(oldest);}state={count:fr.count,total:fr.length,chunks:Array(fr.count),received:0,updated:Date.now()};incoming.set(key,state);}
+ if(!state){
+  if(incoming.size>=5){const oldest=incoming.keys().next().value;incoming.delete(oldest);}
+  state={count:fr.count,total:fr.length,chunks:Array(fr.count),packetIds:new Set(),received:0,updated:Date.now()};
+  incoming.set(key,state);
+ }
  if(state.count!==fr.count||state.total!==fr.length)return;
- if(!state.chunks[fr.index]){state.chunks[fr.index]=fr.bytes;state.received++;}state.updated=Date.now();
+ state.packetIds.add(packetId);
+ if(!state.chunks[fr.index]){state.chunks[fr.index]=fr.bytes;state.received++;}
+ state.updated=Date.now();
  if(state.received!==state.count)return;
  incoming.delete(key);
  const payload=P.concat(...state.chunks);
  if(payload.length!==state.total)return;
  try{
   const plain=await P.open(secretKey,payload,fr.transferId),env=P.parseEnvelope(plain);
-  await handleEnvelope(env,mac);recentTransfers.set(key,Date.now());
- }catch(e){console.warn('Encrypted message rejected:',e);toast('Encrypted transfer rejected: wrong pairing key, corrupted data, or authentication failure.');}
+  if(![P.types.text,P.types.delivered,P.types.read,P.types.edit,
+        P.types.delete,P.types.played].includes(env.kind))return;
+  await handleEnvelope(env,mac);
+  recentTransfers.set(key,Date.now());
+  /* Hardware-level ACK was automatic. APPACK here records that the whole
+   * message decrypted and was processed by this application. These are
+   * local USB commands and do NOT trigger separate over-air packets. */
+  for(const id of state.packetIds){
+   void writeLine(`APPACK ${mac} ${session} ${id}`).catch(()=>{});
+  }
+ }catch(e){
+  console.warn('Encrypted message rejected:',e);
+  toast('Encrypted transfer rejected: wrong pairing key, corrupted data, or authentication failure.');
+ }
 }
 async function handleEnvelope(env,mac){
  if(env.kind===P.types.probe){
@@ -635,7 +682,7 @@ async function handleEnvelope(env,mac){
   }
   await storeRecord(r);refreshMessageBubble(r);updateSidebar();return;
  }
- if(env.kind===P.types.delivered||env.kind===P.types.read){if(env.body.length!==8)return;const original=P.hex(env.body),r=recordMap.get(original);if(r&&r.dir==='out')await setState(r,env.kind===P.types.read?'read':'delivered');return;}
+ if(env.kind===P.types.delivered||env.kind===P.types.read){if(env.body.length!==8)return;const original=P.hex(env.body),r=recordMap.get(original);if(r&&r.dir==='out')await setState(r,globalThis.OffGridLoRaDelivery.encryptedReceiptStatus(env.kind===P.types.read?'read':'delivered'));return;}
  if(env.kind===P.types.played){
   if(env.body.length!==8)return;
   const r=recordMap.get(P.hex(env.body));
@@ -726,33 +773,54 @@ async function sealJob(job){
      ((['image','voice'].includes(job.kind) && !job.control && selectivePhotoAcks && adaptivePhotos) ||
       (job.kind==='probe' && job.batch)))});
 }
-async function oneFragment(frame){
+async function oneFragment(frame,job,index){
  const hex=P.hex(frame),started=performance.now();
  await new Promise((resolve,reject)=>{
   if(radioByHex.has(hex)){reject(Error('Duplicate fragment already outstanding'));return;}
-  const slot={hex,resolve,reject,wire:null,timer:null};radioByHex.set(hex,slot);
+  const slot={hex,resolve,reject,wire:null,timer:null,job,index,sent:false};
+  radioByHex.set(hex,slot);
   slot.timer=setTimeout(()=>{
-   if(radioByHex.get(hex)===slot){clearSlot(slot);reject(Error('LoRa delivery unconfirmed (peer may have received the message)'));}
-  },14000);
-  writeLine('MSGHEX '+hex).catch(e=>{if(radioByHex.get(hex)===slot){clearSlot(slot);reject(e);}});
+   if(radioByHex.get(hex)===slot){
+    clearSlot(slot);
+    reject(Error('LoRa radio acknowledgment unconfirmed (peer may have received the frame)'));
+   }
+  },9000);
+  writeLine((job.control?'CTRLHEX ':'MSGHEX ')+hex).catch(e=>{
+   if(radioByHex.get(hex)===slot){clearSlot(slot);reject(e);}
+  });
  });
  return {ms:Math.max(1,performance.now()-started),attempts:1};
 }
-
 function onRadio(type,session,id,extra){
- const slot=radioByWire.get(`${session}:${id}`);if(!slot)return;
- if(type==='DELIVERED'||type==='FAILED'){
-  clearSlot(slot);
-  if(type==='DELIVERED')slot.resolve();else slot.reject(Error(extra||'No remote browser acknowledgment'));
+ const slot=radioByWire.get(`${session}:${id}`);
+ if(!slot)return;
+ if(type==='SENT'){
+  if(!slot.sent){
+   slot.sent=true;
+   const job=slot.job;
+   if(job?.record){
+    if(globalThis.OffGridLoRaDelivery.markTxDone(job,slot.index))
+     void setState(job.record,'sent');
+   }
+  }
+  return;
+ }
+ if(type==='RADIOACK'||type==='DELIVERED'){
+  /* DELIVERED accepted for old firmware compatibility. v1.1 uses RADIOACK;
+   * neither event can generate double-gray or blue ticks. */
+  clearSlot(slot);slot.resolve();
+ }else if(type==='FAILED'){
+  clearSlot(slot);slot.reject(Error(extra||'Radio acknowledgment missing'));
  }
 }
 async function transferFragments(chunks,job){
  const transferStart=performance.now();
+ job.totalFrames=chunks.length;job.transmitted=new Set();
  let next=0,completed=0,fatal=null;const inflight=new Map();
  while((completed<chunks.length)&&!fatal){
   while(next<chunks.length&&inflight.size<chosenWindow(job)){
    const i=next++;
-   const op=oneFragment(chunks[i]).then(result=>({i,...result})).catch(error=>({i,error}));
+   const op=oneFragment(chunks[i],job,i).then(result=>({i,...result})).catch(error=>({i,error}));
    inflight.set(i,op);
   }
   if(!inflight.size)break;
@@ -787,7 +855,12 @@ async function runTransfers(){
        if(job.kind==='played')r.playedSent=true;
        await storeRecord(r);
       }
-    }else if(job.record){await setState(job.record,'sent');}
+    }else if(job.record){
+      /* All radio fragments were authenticated by the peer transceiver.
+       * Only an encrypted delivered receipt can show the double tick. */
+      await setState(job.record,'sent');
+      watchDeliveryReceipt(job.record,chunks.length);
+    }
    }catch(e){
     if(job.control){
       if(job.kind==='read')pendingReads.delete(job.targetId);
@@ -834,10 +907,10 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected OffGrid LoRa v1.0 firmware: PROTO=2 CAP=180 STABLE=1 NVSKEY=1 FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.1.0 firmware on BOTH ESP32s: ACKENGINE=2, PROTO=2, CAP=180, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
- if(/^(SENT|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
+ if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
  if(s.startsWith('ERROR|')){const reason=s.slice(6);if(pendingRadio()&&/^(QUEUE_FULL|EVENT_QUEUE_FULL|INVALID_HEX_OR_LENGTH|LINE_TOO_LONG|UNKNOWN_COMMAND)/.test(reason)){const slot=[...radioByHex.values()].findLast(x=>!x.wire)||[...radioByHex.values()].at(-1);if(slot){clearSlot(slot);slot.reject(Error('ESP32: '+reason));}}toast('ESP32: '+reason);}
 }
 function consume(data){serialBuffer+=new TextDecoder().decode(data);let i;while((i=serialBuffer.indexOf('\n'))>=0){parseLine(serialBuffer.slice(0,i));serialBuffer=serialBuffer.slice(i+1);}if(serialBuffer.length>8192)serialBuffer='';}
@@ -1097,7 +1170,7 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.0.0'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.1.0'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
   ['Profile','SF7 / 125 kHz / CR 4/5 / TX 10 dBm'],
@@ -1107,10 +1180,10 @@ function showInfo(){showDialog('LoRa chat information',body=>{
   ['Photos / voice','Scheduled for later LoRa releases'],
   ['History','Browser IndexedDB encrypted using your pairing key']];
  for(const [title,value] of rows){const row=el('div','info-line');row.append(el('span','',title),el('strong','',value));body.append(row);}
- body.append(el('p','','Single gray tick = peer browser acknowledged all radio fragments. Double gray = encrypted delivery receipt processed. Double blue = authenticated read receipt processed. A timeout means unconfirmed, not definitely undelivered.'));
+ body.append(el('p','','Single gray tick = SX1278 TxDone for all fragments. Double gray = authenticated encrypted delivery receipt. Double blue = authenticated read receipt. A timeout means unconfirmed, not definitely undelivered.'));
  });}
 function showSettings(){showDialog('LoRa settings',body=>{
- body.append(el('p','','OffGrid Messenger LoRa v1.0: fixed 433 MHz / SF7 / 125 kHz / 4/5 / 10 dBm. Wi-Fi and ESP-NOW are not started. Photos, voice and adjustable radio profiles are intentionally disabled until their own releases.'));
+ body.append(el('p','','OffGrid Messenger LoRa v1.1: fixed 433 MHz / SF7 / 125 kHz / 4/5 / 10 dBm. Wi-Fi and ESP-NOW are not started. Photos, voice and adjustable radio profiles are intentionally disabled until their own releases.'));
  const buttons=el('div','settings-actions');
  for(const [name,action] of [['Rename contact',showRename],['Node pairing key',showPairing],
    ['USB diagnostics',diagnoseUsb],['LoRa status',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){
