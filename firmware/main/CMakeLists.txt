@@ -8,5 +8,5 @@ idf_component_register(
   SRCS "main.c" "ble_bridge.c"
   INCLUDE_DIRS "."
   REQUIRES bt mbedtls nvs_flash esp_timer esp_hw_support
-  PRIV_REQUIRES offgrid_sx1278 ${og_usb_dep}
+  PRIV_REQUIRES offgrid_sx1278 offgrid_arq ${og_usb_dep}
 )
