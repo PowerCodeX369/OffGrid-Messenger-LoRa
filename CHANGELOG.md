@@ -1,5 +1,21 @@
 # Changelog
 
+## [1.2.0-rc.1] — 2026-11-12
+
+**LoRa burst-scheduling and encrypted speed-test release candidate.**
+
+- One global browser-to-radio fragment scheduler (including encrypted receipts); bounded backlog, high-priority control preemption and fairness after four receipts. Eliminates accidental browser-side competing SX1278 transmissions.
+- Authenticated delivery/read receipts compacted into batches of up to eight items (one LoRa fragment), with correct per-message ID/type, idempotent status processing and a bounded retransmission if the receipt radio ACK is missing.
+- Firmware keeps one outstanding RF DATA, checks RX modem status without resetting an in-progress packet, then uses best-effort CAD and randomized channel-busy deferral; ACKs never wait for CAD. Suppresses discovery traffic when recently heard peer traffic is ongoing.
+- Deduplicates queued radio ACKs and allows critical ACKs to displace stale HELLO commands; exposes real `TXFAIL`, `CAD_BUSY`, `PENDING` and `CTRLQ` diagnostics.
+- **Real LoRa speed test:** 64/256/512/1024-byte encrypted application probes, 4/8/12 trials, remote encrypted confirmation, loss rate, median/p95 RTT and payload goodput (not PHY bitrate). Accessible in Settings; does not populate chat history.
+- Firmware `FW=1.2.0-rc.1|ACKENGINE=2|FLOW=2`. Updated web clients require `FLOW=2`; both devices and both browsers must use v1.2 together.
+- Added 50-job serialized burst, bounded-retry/fairness, 8-receipt AES-GCM, and benchmark probe tests; prior AES-GCM, Unicode and SPI DMA checks remain green.
+- Fixed 433 MHz SF7/125 kHz profile unchanged; no ESP-NOW or Wi-Fi runtime, media still disabled, and Android unchanged.
+
+**Validation limitation:** the ESP-IDF 6.1 hardware build, browser Web Serial interaction, and actual two-board burst/loss/throughput performance remain unverified. See [v1.2 engineering and acceptance notes](docs/V1_2_0_BURST_RELIABILITY.md).
+
+
 ## [1.1.0-rc.1] — 2026-11-12
 
 **LoRa text reliability/performance source candidate; hardware acceptance pending.**

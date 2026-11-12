@@ -1,4 +1,4 @@
-# OffGrid Messenger LoRa v1.1 web client
+# OffGrid Messenger LoRa v1.2 web client
 
 Original OffGrid Messenger browser UI and OGM4 AES-GCM codec adapted for **SX1278 LoRa text-only** messaging.
 
@@ -10,6 +10,12 @@ The UI starts no radio until SX1278 initialization has succeeded; USB `READY` is
 
 **Tip:** Browser refresh closes Web Serial; reconnect using Connect ESP32. The pairing key remains in the ESP32 NVS across ordinary flashes. The interface reads it only through physically authorized USB.
 
-## v1.1 delivery engine
+## v1.1 delivery engine (historical; superseded by v1.2)
 
-Use the v1.1 browser with **both** boards running v1.1 firmware (`ACKENGINE=2`). A local `SENT`/SX1278 TxDone event produces the single tick when all fragments were transmitted; `RADIOACK` advances an authenticated fragment; only AES-GCM delivered/read envelopes produce double/blue ticks. Missing final receipt becomes explicitly unconfirmed, never false success. An encrypted delivered/read control enters priority `CTRLHEX`. Browser prepares up to three text fragments but the firmware sends only one RF-unacknowledged frame at a time. A 500-character Unicode text may still take multiple seconds due to physical airtime; photos/voice/video remain disabled.
+The earlier v1.1 browser with **both** boards running v1.1 firmware (`ACKENGINE=2`). A local `SENT`/SX1278 TxDone event produces the single tick when all fragments were transmitted; `RADIOACK` advances an authenticated fragment; only AES-GCM delivered/read envelopes produce double/blue ticks. Missing final receipt becomes explicitly unconfirmed, never false success. An encrypted delivered/read control enters priority `CTRLHEX`. The v1.1 browser prepared up to three text fragments but the firmware sends only one RF-unacknowledged frame at a time. A 500-character Unicode text may still take multiple seconds due to physical airtime; photos/voice/video remain disabled.
+
+## v1.2 changes — rapid messaging and LoRa benchmark
+
+The browser **never submits more than one outstanding SX1278 radio fragment**. It schedules encrypted delivered/read receipt frames ahead of normal message fragments at packet boundaries, but limits control bursts so data cannot starve. Up to 8 authenticated receipt entries fit into one OGM4 `receiptBatch` envelope and one radio fragment. Both connected browsers **must** load this v1.2 web build, and both ESP32s must advertise `FLOW=2` and `ACKENGINE=2`. A cached older browser cannot interpret the new receipt batch type.
+
+Settings → **LoRa speed test** sends 4/8/12 encrypted random probes of 64/256/512/1024 bytes. The other browser replies with authenticated encrypted `probeAck`. It reports confirmed/unconfirmed attempts, median/p95 roundtrip times and application goodput in B/s and KiB/s (including failed trials and overhead). Tests do not appear in chat history, and no Wi-Fi or internet is used. Cancel stops further trials but cannot cancel packets already on-air. Photo/voice/video transfer is still disabled.
