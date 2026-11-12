@@ -11,6 +11,6 @@ int main(void) {
     p.tx_power_dbm=20;assert(!offgrid_sx1278_profile_valid(&p));
     p.tx_power_dbm=10;p.frequency_hz=600000000;
     assert(!offgrid_sx1278_profile_valid(&p));
-    puts("PASS: SX1278 safe fixed profile and invalid-parameter rejects");
+    puts("PASS: SX1278 125/250/500 kHz safe profiles and invalid rejects");
     return 0;
 }
