@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=96*1024,MAX_VOICE_MS=P.VOICE_MAX_MS,STORE='OffGridMessengerV14';
-const APP_VERSION='1.6.0-rc1-lora';
+const APP_VERSION='1.6.1-rc1-lora';
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
 const stateRank={sending:0,queued:0,sent:1,failed:1,delivered:2,read:3};
@@ -161,7 +161,9 @@ async function runLoraSpeedTest(size,count,button,outputNode,cancelButton){
    try{
     const result=await promise;
     run.results.push({ok:true,ms:result.ms,bytes:size,frames:result.frames});
-    outputNode.textContent+=`Test ${i+1}/${count}: delivered + confirmed in ${(result.ms/1000).toFixed(2)} s\n`;
+    const m=job.bulkMetrics;
+    outputNode.textContent+=`Test ${i+1}/${count}: delivered + confirmed in ${(result.ms/1000).toFixed(2)} s`+
+      (m?` | local USB ${(m.usbStageMs/1000).toFixed(2)}s; RF confirm ${(m.radioWaitMs/1000).toFixed(2)}s; ARQ retransmissions ${m.RETX??'n/a'}`:'')+'\n';
    }catch(e){
     if(speedDiagnostics.cancelRequested)throw Error('Benchmark canceled');
     run.results.push({ok:false,ms:performance.now()-job.started,bytes:0});
@@ -178,7 +180,7 @@ async function runLoraSpeedTest(size,count,button,outputNode,cancelButton){
    `Confirmed message RTT median: ${stats.medianMs===null?'N/A':(stats.medianMs/1000).toFixed(2)+' s'}\n`+
    `Confirmed message RTT p95: ${stats.p95Ms===null?'N/A':(stats.p95Ms/1000).toFixed(2)+' s'}\n`+
    `Wall time: ${(stats.elapsedMs/1000).toFixed(1)} s\n`+
-   'Results include encrypted application processing, retries, USB and radio overhead. They are not RF PHY bitrates.\n';
+   'Local USB and RF-confirmation timings are measured separately; the full round trip also includes the remote browser, encrypted reply, and other overhead. These are not RF PHY bitrates.\n';
  }catch(e){outputNode.textContent+='Test stopped: '+e.message+'\n';}
  finally{speedDiagnostics.busy=false;speedDiagnostics.cancelRequested=false;button.disabled=false;cancelButton.disabled=true;speedDiagnostics.full=null;}
 }
@@ -947,7 +949,7 @@ async function transferFragments(packet,job){
  if(!bulkLink)throw Error('Bulk LoRa transport not connected');
  const started=performance.now(),frames=Math.ceil(packet.ciphertext.length/224);
  job.totalFrames=frames;job.transmitted=new Set();
- await rfScheduler.submit(job.control?'receipt':'data',()=>bulkLink.send(
+ job.bulkMetrics=await rfScheduler.submit(job.control?'receipt':'data',()=>bulkLink.send(
     packet.transferId,packet.ciphertext,Boolean(job.control),{
       onSent:()=>{
         if(job.record)void setState(job.record,'sent');
@@ -1109,7 +1111,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=4')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.6.0-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=4')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.6.1-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
@@ -1382,7 +1384,7 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.6.0-rc.1'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.6.1-rc.1'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
   ['Profile',`${profileLabels[currentProfile]}: SF${profileRadio.sf} / ${profileRadio.bw/1000} kHz / CR 4/5 / TX ${profileRadio.power} dBm`],

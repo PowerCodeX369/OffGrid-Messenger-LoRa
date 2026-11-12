@@ -2,9 +2,9 @@
  * The browser encrypts the whole OGM4 envelope before staging ciphertext.
  * CRC32 protects USB staging, not application secrecy/authenticity. */
 (function(root){'use strict';
- const MAX=7168,CHUNK=160;
+ const MAX=7168,CHUNK=160,PIPELINE=4;
  const HEX=/^[0-9A-F]{16}$/;
- const TYPE=/^(BULKREADY|BULKSTEP|BULKQUEUED|BULKSENT|BULKPROGRESS|BULKCONFIRMED|BULKFAILED|RXBSTART|RXBCHUNK|RXBDONE)\|/;
+ const TYPE=/^(BULKREADY|BULKSTEP|BULKQUEUED|BULKSENT|BULKPROGRESS|BULKCONFIRMED|BULKFAILED|BULKSTAT|RXBSTART|RXBCHUNK|RXBDONE)\|/;
  const asHex=a=>Array.from(a,b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
  const fromHex=s=>{if(typeof s!=='string'||!/^(?:[0-9a-f]{2})+$/i.test(s))throw Error('Invalid bulk hex');return Uint8Array.from(s.match(/../g),h=>parseInt(h,16));};
  function crc32(bytes){let c=0xFFFFFFFF;for(const b of bytes){c^=b;for(let i=0;i<8;i++)c=(c>>>1)^((c&1)?0xEDB88320:0);}return (c^0xFFFFFFFF)>>>0;}
@@ -29,7 +29,7 @@
    if(!HEX.test(id)||id.slice(0,8)==='00000000'||id.slice(8)==='00000000'||
       !(ciphertext instanceof Uint8Array)||ciphertext.length<28||ciphertext.length>MAX)
     throw Error('Invalid encrypted LoRa bulk transfer');
-   const a={id,priority,waiter:null,onSent,onProgress,sent:false,done:false,resolveFinal:null,rejectFinal:null};
+   const a={id,priority,waiter:null,onSent,onProgress,sent:false,done:false,resolveFinal:null,rejectFinal:null,started:performance.now(),stagedAt:0,radioStats:null};
    const final=new Promise((resolve,reject)=>{a.resolveFinal=resolve;a.rejectFinal=reject;});
    /* A rejected terminal promise can arrive while stage writes are pending.
     * Attach a handler immediately so browsers do not report unhandled rejects. */
@@ -44,14 +44,27 @@
    };
    try{
     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');
-    for(let seq=0,off=0;off<ciphertext.length;seq++,off+=CHUNK){
-     await sendStage(`BULKCHUNK ${id} ${seq} ${asHex(ciphertext.subarray(off,off+CHUNK))}`,'BULKSTEP',seq);
+    /* Bounded 4-line USB write. The radio task processes each chunk in
+     * strict sequence and replies only after the final chunk of this batch.
+     * A failed intermediate chunk emits BULKFAILED and rejects the waiter;
+     * therefore none of the intermediate integrity checks is bypassed. */
+    let seq=0;
+    for(let off=0;off<ciphertext.length;){
+     const lines=[];
+     for(let n=0;n<PIPELINE&&off<ciphertext.length;n++,seq++,off+=CHUNK){
+      lines.push(`BULKCHUNK ${id} ${seq} ${asHex(ciphertext.subarray(off,off+CHUNK))}`);
+     }
+     await sendStage(lines.join('\n'),'BULKSTEP',seq-1);
     }
     await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');
+    a.stagedAt=performance.now();
     /* Timeout scales with Max/Range airtime and 32 possible fragments. */
     const ms=22000+Math.ceil(ciphertext.length/224)*4500;
     const timeout=setTimeout(()=>a.rejectFinal(Error('LoRa bitmap ACK transfer unconfirmed')),ms);
     try{await final;this.stats.confirmed++;}finally{clearTimeout(timeout);}
+    return Object.freeze({usbStageMs:a.stagedAt-a.started,
+      transferMs:performance.now()-a.started,radioWaitMs:performance.now()-a.stagedAt,
+      ...(a.radioStats||{})});
    }catch(e){this.stats.failed++;throw e;}
    finally{if(this.active===a)this.active=null;}
   }
@@ -81,7 +94,16 @@
    }
    const a=this.active;
    if(!a || (id!=='SESSION'&&id!==a.id))return true;
-   if(type==='BULKFAILED'){
+   if(type==='BULKSTAT'){
+    const stats={};
+    for(const field of parts.slice(2)){
+     const cut=field.indexOf('=');if(cut<1)continue;
+     const key=field.slice(0,cut),value=Number(field.slice(cut+1));
+     if(['RF_MS','FRAMES','RETX','TIMEOUT'].includes(key)&&Number.isFinite(value)&&value>=0)
+      stats[key]=value;
+    }
+    a.radioStats=stats;
+   }else if(type==='BULKFAILED'){
     const err=Error('ESP32 bulk transfer unconfirmed: '+parts.slice(2).join(' '));
     if(a.waiter){a.waiter.reject(err);a.waiter=null;}
     a.rejectFinal(err);
@@ -99,6 +121,6 @@
    return true;
   }
  }
- const api=Object.freeze({MAX,CHUNK,crc32,hex32,BulkLink});root.OffGridLoRaBulk=api;
+ const api=Object.freeze({MAX,CHUNK,PIPELINE,crc32,hex32,BulkLink});root.OffGridLoRaBulk=api;
  if(typeof module!=='undefined'&&module.exports)module.exports=api;
 })(typeof globalThis!=='undefined'?globalThis:this);
