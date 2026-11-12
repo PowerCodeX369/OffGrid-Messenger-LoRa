@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.5.0-rc.1] — 2026-11-13
+
+**Manual three-mode LoRa radio candidate; v1.3/v1.4 were not published.**
+
+- Add Low Power / Fast (SF7, BW500, +2 dBm), Balanced (SF7, BW250, +10 dBm), and Max Power / Range (SF9, BW125, +17 dBm) at 433 MHz, all 4/5 coding. Highest *standard* PA_BOOST output is +17 dBm; do not enable PA_DAC +20 dBm on unverified Ra-02/supply hardware.
+- Add new authenticated profile OFFER/AGREE OGM2 control frames, manual USB `PROFILE` command, user-facing web profile chooser, negotiated RF reconfiguration, HELLO verification and timed rollback. No RSSI-driven automatic switching; restart always restores Balanced.
+- Add profile-dependent radio-ACK retry deadlines, keeping the previous known-working direct-SX1278 TX path and the v1.2 browser receipt-priority scheduler. No CAD transmit gate.
+- Add pure C tests for all three SX1278 registers and PA bounds, authenticated frame layout, source checks for manual-only control, and Chromium web modal smoke test.
+- Keep AES-256-GCM chat/receipt protocol, HMAC radio framing, BLE and web USB, 500-character text and speed benchmark. Photos, voice/video and Android LoRa support remain disabled; Android tree is untouched.
+- **Not hardware-verified**: actual ESP-IDF 6.1 compilation, two-node mode transitions, rollback, BLE coexistence, range, measured throughput and maximum power supply stability must be tested before stable release. See [acceptance checklist](docs/V1_5_0_MANUAL_PROFILES.md).
+
+
 ## [1.2.0-rc.2] — 2026-11-12
 
 **TX recovery candidate; the prior rc.1 was reported to stop sending messages.**

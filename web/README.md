@@ -1,21 +1,9 @@
-# OffGrid Messenger LoRa v1.2 web client
+# OffGrid Messenger LoRa — web v1.5.0-rc.1
 
-Original OffGrid Messenger browser UI and OGM4 AES-GCM codec adapted for **SX1278 LoRa text-only** messaging.
+Browser-based encrypted text messenger, using USB Web Serial to a dedicated SX1278 ESP32-C3 node. Serve via `python3 -m http.server 8765 --bind 127.0.0.1 --directory web` from the repository root. Use the same 32-byte pairing key on both nodes. Photos, voice and video are intentionally disabled.
 
-From the root: `python3 -m http.server 8765 --bind 127.0.0.1 --directory web` and open <http://127.0.0.1:8765> in Chrome or Edge. Each connected ESP32 requires its own Web Serial session. Pair both using the same 32-byte key. No web content is hosted on the ESP32 and no internet is required.
+**Manual profile switching:** Settings → **Manual LoRa profiles**. One user action negotiates with the peer through authenticated control packets on the *existing* LoRa profile. Both nodes must run v1.5 firmware; v1.2 and v1.5 have incompatible default bandwidths. The UI waits for `PROFILE|ACTIVE`; firmware rolls back if new-mode confirmation fails. Beware pending message/receipt jobs; a forced switch marks them unconfirmed, never delivered.
 
-The app rejects firmware without `FAMILY=LORA`. No `RATE` or `TRANSPORT` commands are sent. Unsupported photo and voice controls are hidden/disabled until they are specifically implemented and tested in later LoRa releases. The original photo/voice source has been retained as a **reference**, not an enabled capability. Inherited browser cryptography tests cover its codecs but are **not proof of LoRa media throughput**.
+**Speed test:** Settings → LoRa speed test. Sends encrypted random probes to the paired browser and records message RTT, goodput and failures. Compare 8 × 1024-byte benchmarks in each profile. These are not raw PHY bitrates.
 
-The UI starts no radio until SX1278 initialization has succeeded; USB `READY` is emitted only after that step. During communication, authenticated delivery and read controls have an independent web queue and bypass ongoing user text transfers.
-
-**Tip:** Browser refresh closes Web Serial; reconnect using Connect ESP32. The pairing key remains in the ESP32 NVS across ordinary flashes. The interface reads it only through physically authorized USB.
-
-## v1.1 delivery engine (historical; superseded by v1.2)
-
-The earlier v1.1 browser with **both** boards running v1.1 firmware (`ACKENGINE=2`). A local `SENT`/SX1278 TxDone event produces the single tick when all fragments were transmitted; `RADIOACK` advances an authenticated fragment; only AES-GCM delivered/read envelopes produce double/blue ticks. Missing final receipt becomes explicitly unconfirmed, never false success. An encrypted delivered/read control enters priority `CTRLHEX`. The v1.1 browser prepared up to three text fragments but the firmware sends only one RF-unacknowledged frame at a time. A 500-character Unicode text may still take multiple seconds due to physical airtime; photos/voice/video remain disabled.
-
-## v1.2 changes — rapid messaging and LoRa benchmark
-
-The browser **never submits more than one outstanding SX1278 radio fragment**. It schedules encrypted delivered/read receipt frames ahead of normal message fragments at packet boundaries, but limits control bursts so data cannot starve. Up to 8 authenticated receipt entries fit into one OGM4 `receiptBatch` envelope and one radio fragment. Both connected browsers **must** load this v1.2 web build, and both ESP32s must advertise `FLOW=2` and `ACKENGINE=2`. A cached older browser cannot interpret the new receipt batch type.
-
-Settings → **LoRa speed test** sends 4/8/12 encrypted random probes of 64/256/512/1024 bytes. The other browser replies with authenticated encrypted `probeAck`. It reports confirmed/unconfirmed attempts, median/p95 roundtrip times and application goodput in B/s and KiB/s (including failed trials and overhead). Tests do not appear in chat history, and no Wi-Fi or internet is used. Cancel stops further trials but cannot cancel packets already on-air. Photo/voice/video transfer is still disabled.
+Encryption and tick meanings are unchanged: AES-256-GCM OGM4 application content; radio HMAC-SHA256; one tick after TxDone, double gray after authenticated delivered receipt, blue after authenticated read receipt. Wi-Fi and ESP-NOW are absent from the firmware. The original Android app remains frozen until the final universal-app milestone.

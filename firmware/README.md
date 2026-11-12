@@ -1,46 +1,19 @@
-# OffGrid Messenger LoRa v1.2 firmware
+# OffGrid Messenger LoRa — firmware v1.5.0-rc.1
 
-Target: ESP32-C3 Super Mini / ESP-IDF 6.1 / SX1278 Ra-02.
+ESP32-C3 SX1278 **LoRa-only** firmware. Build using ESP-IDF 6.1: `idf.py set-target esp32c3 && idf.py build`. The firmware does not initialize Wi-Fi or ESP-NOW. USB Serial/JTAG and NimBLE continue to serve the original encrypted browser protocol. The two-radio Hybrid source and ESP-NOW firmware are **not** imported into this runtime.
 
-- The firmware **never** calls `esp_wifi_init`, `esp_wifi_start`, `esp_now_init` or `esp_now_send`.
-- USB and NimBLE remain active. ESP32-C3's internal Wi-Fi circuitry is not initialized; BLE still legitimately uses the chip's Bluetooth hardware.
-- The same pairing key powers browser-side AES-GCM and a **domain-separated** radio HMAC. The key stays in NVS, and `KEYGET` is available on *physical USB only*.
-- One task exclusively owns SX1278 SPI. No Wi-Fi radio is involved.
-- Default SX1278 SF7 / BW125kHz / CR4/5 / 433 MHz / 10 dBm. Radio mode switching is **not** included in v1.2.
-- BLE advertising uses `OffGridLoRa-XXXX`; the original BLE authentication scheme is retained, and authenticated `CAPS?` reports `FAMILY=LORA`. **The original Android app is not LoRa-ready in v1.2.**
+## Manual SX1278 profiles
 
-Build:
+| Mode | SF | BW | Power | Use |
+|---|---:|---:|---:|---|
+| LOW | 7 | 500 kHz | +2 dBm | Fastest and low-power at close range |
+| BALANCED (boot) | 7 | 250 kHz | +10 dBm | Middle setting |
+| MAX | 9 | 125 kHz | +17 dBm | More RF link budget, slower |
 
-```bash
-idf.py set-target esp32c3
-idf.py build
-idf.py -p /dev/ttyACM0 flash monitor
-```
+Default is always **BALANCED** after reset, and it is not saved in NVS. Use `PROFILE LOW`, `PROFILE BALANCED`, or `PROFILE MAX` in the local Web Serial UI or through a bidirectional serial terminal. Switching is manually initiated: authenticated OGM2 offer/agree packets are sent using the *old* profile before both ends reconfigure. The protocol verifies authenticated HELLO on the new profile and rolls back if confirmation is missing. `PROFILE <MODE> FORCE` lets diagnostics cancel pending packets, which must be treated as delivery-unconfirmed. See `../docs/V1_5_0_MANUAL_PROFILES.md` for limitations.
 
-Do not connect multiple serial clients to the same port. Do not `erase-flash` unless you intend to wipe both firmware and NVS. Always attach a suitable antenna before LoRa TX.
+`STATUS` prints `READY`, `LINK`, and `PROFILE|ACTIVE`/`TRANSITION`. The normal worker uses only one unacknowledged radio frame at a time and prioritizes radio ACKs and authenticated browser receipts. The speed benchmark remains in the web UI.
 
-## Local USB protocol
+Power: a matched antenna must be attached when transmitting, 3.3 V must remain stable under load, and Max uses **+17 dBm standard PA_BOOST**, not unqualified +20 dBm mode. Verify applicable 433 MHz rules. If your ESP32-C3 Super Mini 3.3 V supply sags, use a properly rated regulated 3.3 V supply for the SX1278 with common ground and no tied regulator outputs.
 
-```text
-READY|<MAC>|...|FAMILY=LORA|FW=1.2.0-rc.1|FLOW=2
-RADIO|SX1278_READY|433000000|SF7|BW125000|CR4/5|TX_DBM=10
-STATUS
-CAPS?
-KEYSTATUS
-KEYGET
-KEYSET <64 hex chars>
-MSGHEX <1..180 bytes hex>
-CTRLHEX <1..180 bytes hex>  # high-priority encrypted delivered/read control
-APPACK <sender_mac> <sender_session> <radio_id>
-READ <sender_mac> <sender_session> <radio_id>
-```
-
-`MSGHEX` and `CTRLHEX` yield `QUEUED|session|id|hex`. `SENT` is emitted after SX1278 TxDone, `RADIOACK` after the peer firmware authenticates the frame. The sender browser advances the fragment after `RADIOACK`, while **only AES-GCM-protected OGM4 delivered/read receipts** change the displayed double/blue ticks. `APPACK` is a local USB diagnostic acknowledgment *after browser decryption*, without an extra per-fragment delivery radio packet. `FAILED|...|NO_RADIO_ACK` indicates an unconfirmed RF acknowledgment, not proof that no one received the data. `TRACE|TX_DONE`, `TRACE|RADIO_ACK` and `TRACE|APP_VALIDATED` provide diagnostic timing. Both boards need this new ACK engine; READY advertises `FW=1.2.0-rc.1|...|ACKENGINE=2|FLOW=2`. `LINK|...` reports counters; a green USB connection is *not* proof of a healthy remote radio link. Do not use `KEYGET` output in support logs.
-
-The full [hardware acceptance matrix](../docs/HARDWARE_ACCEPTANCE.md) is mandatory before any stable/hardware-verified claim.
-
-## v1.2 burst reliability and diagnostics
-
-The SX1278 owner task serializes transmissions and prioritizes authentic radio ACKs. `RegModemStat` is checked before best-effort CAD on new DATA transmissions; only channel-busy DATA is deferred (without consuming a retry). Discovery HELLOs are suppressed during recent peer traffic. `LINK` includes `CAD_BUSY`, `PENDING`, `CTRLQ`, `TXFAIL`, `RADIOACK`, and other counters. The browser provides a high-priority one-fragment-at-a-time scheduler, encrypted delivered/read batching, and a Settings → LoRa speed test. It is an **application goodput** test, not an ESP-NOW speed test. The receiver's browser must be connected. Both firmware and web clients must expose `FLOW=2` for this new receipt format.
-
-Do not confuse a radio ACK with the encrypted delivered/read receipt. Single gray tick still means actual TxDone for the whole message, double gray means authenticated application delivery, and double blue means an authenticated read receipt after local viewing. Missing receipt remains unconfirmed; this is not proof that plaintext was lost.
+The media and Android integrations remain disabled/frozen. Full ESP-IDF compilation and real two-board validation are pending; header-only host checks do not prove peripheral or RF behavior.

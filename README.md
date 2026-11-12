@@ -1,110 +1,98 @@
 # OffGrid Messenger LoRa
 
-**Version 1.2.0-rc.2 — TX recovery candidate (rolls back unverified pre-TX CAD gate)**
+**v1.5.0-rc.1 — three manual LoRa profiles and RF-throughput improvements**
 
-Offline, direct peer-to-peer **encrypted text** over two SX1278 Ra-02 transceivers, controlled by a local Chromium Web Serial interface. The firmware **does not initialize Wi-Fi or ESP-NOW**. NimBLE and native USB Serial/JTAG are enabled. This project is a separate derivative of the original [OffGrid Messenger (ESP-NOW)](https://github.com/PowerCodeX369/OffGrid-Messenger), not its replacement.
+Offline, peer-to-peer **end-to-end encrypted text** on two ESP32-C3 Super Mini boards and SX1278 Ra-02 modules. This independent repository is derived from the original [OffGrid Messenger (ESP-NOW)](https://github.com/PowerCodeX369/OffGrid-Messenger). The original ESP-NOW firmware remains separate and untouched.
 
-> **Important recovery information:** v1.2.0-rc.1 was reported unable to send messages. rc.2 removes the new transmit-blocking CAD gate but still needs two-board validation. **If rc.2 fails, restore v1.1.0-rc.1 with its matching web client and share both nodes' diagnostic output.** See [rc.2 TX recovery notes](docs/V1_2_0_RC2_TX_RECOVERY.md).
+> **Verification:** Host C/JS tests and Chromium UI checks passed, but a complete ESP-IDF 6.1 build and two-board profile negotiation have **not** been performed here. This is a release candidate, **not** a hardware-certified stable build. Keep your last known-working firmware and web archive until real tests pass. Changes must be flashed to **both ESP32s**; v1.2 and v1.5 use different startup radio settings and are incompatible over the air.
 
-> **Validation status:** Host-side C and JavaScript regression checks passed. The new integrated firmware has **not** been compiled with a real ESP-IDF 6.1 toolchain or run on two physical ESP32s in the authoring environment. **This v1.2.0 candidate is not yet a hardware-validated release.** Do not count links or ACKs as proven until both boards pass the acceptance checklist.
+## Features and restrictions
 
-## Version 1.2 scope
+- **LoRa only:** no Wi-Fi, ESP-NOW, network service, cloud or internet; BLE/NimBLE and USB Web Serial remain in firmware.
+- The web app retains **AES-256-GCM** message encryption and encrypted local history. Radio DATA, HELLO, radio ACK and profile-control frames carry a **128-bit truncated HMAC-SHA256** computed with a separately derived pairing key. The same 256-bit pairing key must be present on both nodes.
+- **Manual mode change** in *Settings → Manual LoRa profiles*. Only a user click initiates a new profile; the peer participates via authenticated control messages. There is **no automatic RSSI-driven mode selection**.
+- One SX1278 owner task handles SPI2, RX, TxDone and radio ACKs. Encrypted delivery/read receipts have high priority in the existing browser scheduler.
+- 433 MHz prototype configuration (check local operating rules). Do not transmit without a correctly matched antenna. **Power-off before changing wires**.
+- **Disabled:** photos, voice/video, Android LoRa integration, mesh routing, adaptive power control, selective-repeat/bitmap ARQ. Android source is frozen for the final universal-app phase.
 
-| Included | Not included yet |
-|---|---|
-| ESP32-C3 + Ra-02 fixed 433 MHz/SF7/BW125/CR4/5 profile | ESP-NOW, Wi-Fi, hybrid switching |
-| Physical USB web chat, text and encrypted local history | Photo/voice sending (later releases) |
-| Browser AES-256-GCM OGM4 envelopes | Adaptive LoRa Fast/Balanced/Ultra profiles |
-| Authenticated LoRa OGM2 packets and startup discovery | Multihop mesh, range claims, automatic RF tuning |
-| SX1278 radio ACK, application-delivery receipt, read receipt | Android integration (last phase) |
-| Bounded retransmissions, duplicate suppression, ACK priority | Full selective-repeat large-media transport |
-| BLE service, with authenticated future capability handshake | Fully tested BLE/Android interoperability |
+## Three manually chosen profiles
 
-### Hardware connections
-
-**Before powering the prototype:** disconnect USB while changing leads, use **3.3 V only**, share ground, fit a matched **433 MHz antenna before transmitting**, keep leads short, and check supply voltage. A Ra-02 at transmit power can overload a marginal ESP32-C3 Super Mini regulator; using an adequately rated regulated 3.3 V supply for the radio (with shared GND) is recommended if the voltage sags. Do not connect independent 3.3 V regulator outputs together.
-
-| SX1278 pin | ESP32-C3 Super Mini | Purpose |
+| Web label | SX1278 configuration | Expected tradeoff |
 |---|---|---|
-| VCC | 3.3 V regulated | Never 5 V |
-| GND | GND | Common ground |
-| NSS | GPIO10 | SPI chip-select |
-| SCK | GPIO6 | SPI clock |
-| MOSI | GPIO7 | SPI write |
-| MISO | GPIO5 | SPI read |
-| RST | GPIO3 | SX1278 reset |
-| DIO0 | GPIO4 | Radio interrupt |
-| DIO1 | GPIO0 | RX timeout interrupt |
-| DIO2–DIO5 | Not connected | Not needed in v1.2 |
+| **Low Power / Fast** | SF7 · 500 kHz · CR 4/5 · **+2 dBm** | Low TX power, shortest airtime, shortest range/sensitivity |
+| **Balanced** (startup default) | SF7 · 250 kHz · CR 4/5 · **+10 dBm** | Better margin with roughly half Low's nominal PHY rate |
+| **Max Power / Range** | SF9 · 125 kHz · CR 4/5 · **+17 dBm** | Higher sensitivity and output power; **slower** data rate |
 
-Current build uses SPI2 at 4 MHz and the same previously tested pin map. **433 MHz legality, allowed transmit power, and duty-cycle restrictions depend on your country and usage; verify them before RF tests.** Default transmission is **10 dBm** (not the module's advertised maximum).
+At SF7/BW500 the nominal raw PHY bit rate is around **21.9 kbit/s**, versus around **10.9 kbit/s** for SF7/BW250 and **1.76 kbit/s** for SF9/BW125 (4/5). These are modulation estimates, **not measured application throughput**; on-air packet framing, ACKs, encryption overhead and retries reduce usable goodput. High output power does **not** make transmission faster. The +17 dBm limit is the **normal PA_BOOST** limit in this driver; Semtech's separate +20 dBm PA_DAC mode is **not enabled** and is not assumed safe for an unverified Ra-02 breakout/regulator. See `docs/V1_5_0_MANUAL_PROFILES.md`.
 
-## Linux / ESP-IDF build
+Both devices power up in **Balanced**. To change modes, keep both connected and paired, wait for pending messages to finish, then select a mode in one browser. The requesting node sends a **HMAC-authenticated offer** on the current channel. The peer agrees and both switch after a short guard interval. They exchange authenticated HELLO frames on the new profile and return `PROFILE|ACTIVE` only when verified. An unconfirmed change returns to the previous mode after a timeout. For diagnostics a `PROFILE <MODE> FORCE` USB command can mark pending messages **unconfirmed** rather than silently claiming delivery; avoid force during regular use. A restart returns to Balanced, providing a recovery route if peers become desynchronized.
 
-Use an absolute path without spaces or parentheses, e.g. `~/Projects/OffGrid-Messenger-LoRa` (previous ESP-IDF shell commands failed on an unescaped `(1)` directory).
+## Wiring
 
-```bash
-# Activate your already installed ESP-IDF 6.1 environment if needed:
-source "$HOME/.espressif/v6.1/esp-idf/export.sh"  # adjust to YOUR actual IDF_PATH
+| Ra-02 | ESP32-C3 Super Mini |
+|---|---|
+| 3.3 V | Clean regulated 3.3 V — never 5 V |
+| GND | GND, common ground |
+| NSS | GPIO10 |
+| SCK | GPIO6 |
+| MOSI | GPIO7 |
+| MISO | GPIO5 |
+| RST | GPIO3 |
+| DIO0 | GPIO4 |
+| DIO1 | GPIO0 |
+| DIO2–DIO5 | Not connected |
+
+The SX1278 **draws more power in high-power transmission**. On some Super Mini variants the board's 3.3 V output may be marginal; verify the regulator and 3.3 V at the radio under load before using Max Power. Never connect two independent 3.3 V regulator outputs together; use common GND and prevent back-power through GPIOs.
+
+## Building on Linux using ESP-IDF 6.1
+
+Keep the project path free of spaces and parentheses; ESP-IDF shell generation failed on paths containing `(1)` in earlier tests.
+
+```sh
 cd ~/Projects/OffGrid-Messenger-LoRa/firmware
 idf.py set-target esp32c3
 idf.py build
 ```
 
-Check that `idf.py --version` and `echo "$IDF_PATH"` point to the intended environment. If the build succeeds, connect an antenna and **flash the two test boards separately**, using their actual ports:
+After a successful build, flash each board (actual ports may differ):
 
-```bash
+```sh
 idf.py -p /dev/ttyACM0 flash
 idf.py -p /dev/ttyACM1 flash
 ```
 
-Do **not** use `erase-flash` unless you intentionally want to erase NVS including your pairing keys. Close serial monitors before flashing. Inspect output with `idf.py -p /dev/ttyACM0 monitor` or the browser (not both concurrently).
+Do **not** use `erase-flash` unless you intend to lose NVS pairing keys. Pair the two boards with the same encryption key.
 
-### Start the web client
+From the repository root serve the new web client locally:
 
-From the repository root:
-
-```bash
+```sh
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Open **http://127.0.0.1:8765** in Chrome/Edge. Open separate browser windows for the two USB-attached nodes. Connect each device and set the **same 256-bit pairing key** on both. Create the key on one node, copy it locally and install it on the other (key export is restricted to the physical USB connection). The LoRa transmitter will not send user data before a pairing key is configured. The firmware reports `READY|...|FAMILY=LORA|FW=1.2.0-rc.2|FLOW=2`, and the driver reports `RADIO|SX1278_READY` after successful initialization.
+Open **http://127.0.0.1:8765** in a current desktop Chrome/Edge. Connect each ESP32 in its own browser session. A refreshed page requires a new serial connection if the browser cannot unambiguously recover permission. Use the included v1.5 browser files on **both** nodes.
 
-**Do not confuse:** USB `Connected` with a working radio peer. `LINK` shows authenticated RX and radio ACK counters. See [hardware acceptance](docs/HARDWARE_ACCEPTANCE.md).
+Check `READY|...|FW=1.5.0-rc.1|PROFILES=3|ACKENGINE=2|FLOW=2` and `PROFILE|ACTIVE|BALANCED` at startup. The USB commands are `STATUS`, `PROFILE LOW`, `PROFILE BALANCED`, `PROFILE MAX`, and optional `PROFILE MAX FORCE`. The firmware sends progress events `PROFILE|NEGOTIATING`, `PROFILE|AGREED`, `PROFILE|VERIFYING`, `PROFILE|ACTIVE`, `PROFILE|ROLLED_BACK` or `PROFILE|ERROR`.
 
-## Protocol and delivery semantics
+## Delivery semantics and benchmarking
 
-- The browser uses the original OGM4 **AES-256-GCM** transfer protocol. Chat content is encrypted *before* being sent to the ESP32.
-- Over-the-air LoRa frames additionally carry a **truncated 128-bit HMAC-SHA256** tag derived from the NVS pairing key using a domain-separated label. This authenticates the radio header, HELLO, ACK and encrypted data without adding a second plaintext channel.
-- **Single gray tick** means every fragment completed SX1278 TxDone. This is not a receiver acknowledgment.
-- `RADIOACK` means the destination firmware authenticated a frame. This advances fragment transfer without waiting for the browser's separate application receipt.
-- The receiving browser sends its USB-only `APPACK` *after complete AES-GCM decryption*. The firmware does **not** send a redundant fragment-delivered radio packet.
-- **Double gray** comes only from an encrypted delivered receipt, **double blue** only from an encrypted read receipt after the recipient actually views the chat. A lost receipt leaves an explicit *unconfirmed* state; it is not proof of non-delivery.
-- `CTRLHEX` carries encrypted delivered/read controls at higher radio queue priority; at most one unacknowledged LoRa radio frame is transmitted at a time. A longer end-to-end watchdog is distinct from the radio ACK timeout.
-- The v1.2.0-rc.1 pre-TX modem-status/CAD gate was removed in rc.2 after a report that messages stopped sending. Normal data transmission uses the previously working v1.1 send path; scheduling is still serialized and ACKs remain prioritized. This is a source-level rollback, **not yet a hardware-confirmed cure**.
-- Delivered/read receipts are AES-GCM-encrypted priority batches of up to eight receipt entries; each entry still has a distinct message ID and read/delivery meaning.
-- The web client has a **real encrypted LoRa speed test** (64–1024-byte probes) under Settings. It reports application goodput, median/p95 RTT, and confirmed versus unconfirmed trials; it does not claim raw RF throughput.
-- SPI FIFO bursts require SPI DMA on ESP-IDF. The maximum 218-byte frame has host emulation tests; hardware build verification is pending.
-- The LoRa firmware is direct P2P and learns an authenticated peer MAC at runtime; no hardcoded board MAC or saved ESP-NOW peer routing is required.
-- Replays are rejected at the recent packet/transfer level, but the LoRa application has **not received an independent security audit**. A comprehensive persistent replay strategy is planned for v1.8.0.
+- **One gray tick**: every message fragment completed local SX1278 TxDone.
+- **Two gray ticks**: an authenticated, encrypted *delivered* receipt returned from the recipient application.
+- **Two blue ticks**: an authenticated, encrypted *read* receipt returned after the recipient viewed the chat.
+- A lost receipt means **unconfirmed**, never a false success claim. The radio ACK is not equivalent to application delivery.
+- In **Settings → LoRa speed test**, run 4/8/12 encrypted 64–1024 byte probes and compare median/p95 RTT, confirmed fraction and effective goodput **for each profile**. This is *application* throughput, not a PHY benchmark.
 
-### What about the Android app?
+The previous user-measured SF7/BW125 result was approximately **227.8 B/s goodput and 4.45 s median confirmed RTT** for 1,024-byte encrypted probes at 1 metre. The new profiles are intended to improve on that reference, but **no actual v1.5 field measurement exists yet**. Compare all three profiles on the same hardware and distance, initially using Low and Balanced rather than maximum TX power at very short range.
 
-`android/` is intentionally copied **byte-for-byte from original OffGrid Messenger commit `263502f`** and remains an ESP-NOW-generation app in v1.2. It is **not** a LoRa-compatible Android app yet; the required universal firmware-family detection and LoRa capability UI are planned for v2.0.0. See [Android preservation hashes](docs/ANDROID_FROZEN_SHA256.txt).
+## Repository layout
 
-## Layout
+- `firmware/main/` — authenticated OGM2 frame worker, manual profile handshake, native USB, existing BLE bridge
+- `firmware/components/offgrid_sx1278/` — SPI2 driver and pure host-testable SX1278 register policy
+- `web/` — encrypted chat, receipts, mode selection, throughput test
+- `firmware/tests/`, `tests/` — host regression and boundary tests (not hardware certification)
+- `android/` — original Android app unchanged; **not LoRa-compatible yet**
+- `docs/` — profile protocol, hardware acceptance, provenance and historical diagnostics
+- `SOURCE_MANIFEST.sha256` — integrity checksums for tracked repository files (excluding the manifest itself)
 
-- `firmware/main/`: pure-LoRa task, authenticated packet/control handling, NVS key, native USB and inherited NimBLE service
-- `firmware/components/offgrid_sx1278/`: SPI2 transceiver driver and independently testable profile settings
-- `web/`: encrypted web UI and OGM4 codec adapted for text-only LoRa
-- `android/`: **untouched** original Android app for later universal support
-- `firmware/tests/`, `tests/`: host checks; **not** radio hardware certification
-- `docs/`: architecture, pinout, RF test acceptance, security limitations, roadmap, provenance
+Run available host tests with `firmware/tests/run-host-tests.sh`; mock-header C checks are **not a substitute** for an ESP-IDF firmware build. Git history preserves `v1.0.0`, `v1.1.0-rc.1`, and both v1.2 candidates. v1.3 and v1.4 were **not released**; version 1.5 was requested directly and is a prerelease candidate.
 
-Run host checks: `firmware/tests/run-host-tests.sh`. See [v1.2.0 burst reliability and acceptance plan](docs/V1_2_0_BURST_RELIABILITY.md) and [v1.1.0 engineering notes](docs/V1_1_0_RELIABILITY.md), [release notes](CHANGELOG.md), and [known limitations](docs/HARDWARE_ACCEPTANCE.md).
-
-## Source provenance, licensing, and independence
-
-This repository was freshly created for the LoRa-only firmware. The web OGM4 encryption/UX and NimBLE service are derived from the original PowerCodeX project; the SX1278 register driver is adapted from the earlier Hybrid experimental development, **not** its problematic dual-radio transport. Original project reference commit: `263502f`. The original ESP-NOW repository remains independent and has not been modified or pushed by this work. The new repository is distributed under [GPL-3.0](LICENSE) on the understanding that the original copyright holder authorizes this derivative; contributors must retain applicable notices.
-
-**No GitHub publishing was performed automatically.** After your own build, hardware acceptance, and review, you may create `PowerCodeX369/OffGrid-Messenger-LoRa` and push this repo and the annotated `v1.0.0` and prerelease tags after your field tests.
+This project is licensed under the included [GPL-3.0 license](LICENSE). Review [security notes](SECURITY.md), [changelog](CHANGELOG.md), and [acceptance instructions](docs/V1_5_0_MANUAL_PROFILES.md) before a field deployment.
