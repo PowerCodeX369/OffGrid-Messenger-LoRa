@@ -42,9 +42,11 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.5.0-rc.1" in main and "1.5.0-lora" in web
-assert 'PROFILES=3' in main and 'PROFILES=3' in web
-assert 'PROFILE LOW/BALANCED/MAX' in main
+assert "1.6.0-rc.1" in main and "1.6.0-rc1-lora" in web
+assert 'PROFILES=4' in main and 'PROFILES=4' in web
+assert 'ARQ=1' in main and 'ARQ=1' in web
+assert 'BULKBEGIN' in main and 'BulkLink' in web
+assert 'PROFILE,POWER18 VERIFIED' in main
 assert 'profileTransition' in web and 'showProfileDialog' in web
 # Source copied to Android is truly unchanged against the imported ESP-NOW
 # repository. The pinned reference hash list is checked during packaging.

@@ -2,7 +2,7 @@
 #include <assert.h>
 #include <stdio.h>
 int main(void) {
-    offgrid_sx1278_profile_t p={433000000,OFFGRID_SX1278_BW_125_KHZ,7,5,10,0x2d,8};
+    offgrid_sx1278_profile_t p={.frequency_hz=433000000,.bandwidth=OFFGRID_SX1278_BW_125_KHZ,.spreading_factor=7,.coding_denominator=5,.tx_power_dbm=10,.sync_word=0x2d,.preamble_symbols=8};
     offgrid_sx1278_register_profile_t r={0};
     assert(offgrid_sx1278_profile_valid(&p));
     assert(offgrid_sx1278_make_registers(&p,&r));

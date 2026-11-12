@@ -60,7 +60,7 @@ esp_err_t spi_device_transmit(spi_device_handle_t device,spi_transaction_t *t){
     return ESP_OK;
 }
 int main(void){
-    const offgrid_sx1278_profile_t p={433000000,OFFGRID_SX1278_BW_125_KHZ,7,5,10,0x2d,8};
+    const offgrid_sx1278_profile_t p={.frequency_hz=433000000,.bandwidth=OFFGRID_SX1278_BW_125_KHZ,.spreading_factor=7,.coding_denominator=5,.tx_power_dbm=10,.sync_word=0x2d,.preamble_symbols=8};
     offgrid_sx1278_t *radio=NULL;
     offgrid_sx1278_pins_t pins=offgrid_sx1278_default_pins();
     assert(offgrid_sx1278_open(&pins,&p,&radio)==ESP_OK);

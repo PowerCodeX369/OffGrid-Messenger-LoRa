@@ -10,5 +10,5 @@ assert 'offgrid_sx1278_rx_busy(' not in queue
 assert 'esp_err_t status=tx(&p->frame);' in queue
 assert 'output("SENT|' in queue
 assert 'OG_TX_ATTEMPTS' in queue
-assert 'FW=1.5.0-rc.1' in source
+assert 'FW=1.6.0-rc.1' in source
 print('PASS: rc.2 transmit path has no CAD gate; TX completion and retries retained')

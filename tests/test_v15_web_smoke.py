@@ -16,12 +16,12 @@ with sync_playwright() as playwright:
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.set_content(html)
     for name in ['protocol.js','adaptive.js','lora_delivery.js','lora_scheduler.js',
-                 'lora_benchmark.js','lora_receipts.js','app.js']:
+                 'lora_benchmark.js','lora_receipts.js','lora_bulk.js','app.js']:
         page.add_script_tag(content=(root / name).read_text())
     page.locator('#settingsButton').click()
     page.get_by_role('button', name='Manual LoRa profiles').click()
     text = page.locator('#modalBody').inner_text()
-    for phrase in ['Low Power','Balanced','Max Power','500 kHz','250 kHz','125 kHz','17 dBm']:
+    for phrase in ['Fast / Nominal','Balanced','Max Power','500 kHz','250 kHz','125 kHz','18 dBm','22 dBm']:
         assert phrase in text, (phrase, text)
     assert not errors, errors
     print('PASS: in-memory Chromium profile modal (no USB/RF test)')

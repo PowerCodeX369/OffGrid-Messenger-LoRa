@@ -14,14 +14,14 @@ assert 'profile_state.phase=OG_PROFILE_IDLE' in main
 assert 'profile_report("ROLLED_BACK")' in main
 assert 'profile_report("ACTIVE")' in main
 assert 'profile_assist_until_ms' in main
-assert 'CMD_PROFILE' in main and 'PROFILE_SWITCH_IN_PROGRESS' in main
+assert 'CMD_PROFILE' in main and 'PROFILE_SWITCH_OR_ARQ_BUSY' in main
 assert 'og_mode_ack_wait_ms(profile_state.current,p->tries)' in main
 assert 'og_mode_parse(name)' in main and 'c.force_profile' in main
 assert 'profileTransition' in web and "s.startsWith('PROFILE|')" in web
 assert 'requestProfileChange' in web and 'showProfileDialog' in web
 assert 'rfScheduler.submit(' in web
 assert 'OFFGRID_SX1278_BW_500_KHZ' in profile
-assert 'tx_power_dbm=17' in profile and 'tx_power_dbm=2' in profile
+assert 'tx_power_dbm=18' in profile and 'high_pa_dac=true' in profile
 for forbidden in ('esp_now_init(', 'esp_wifi_init(', 'esp_wifi_start('):
     assert forbidden not in main
 print('PASS: v1.5 manual authenticated profile-change boundaries and RX/TX isolation')

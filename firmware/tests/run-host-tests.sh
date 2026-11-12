@@ -29,6 +29,17 @@ cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
     firmware/tests/test_lora_schedule.c -o "$schedule_bin"
 "$schedule_bin"
 rm -f "$schedule_bin"
+bridge_bin=/tmp/offgrid-lora-bridge-$$
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -Ifirmware/components/offgrid_arq/include \
+    firmware/tests/test_arq_bridge.c \
+    firmware/components/offgrid_arq/og_arq_bridge.c \
+    firmware/components/offgrid_arq/og_sr.c \
+    firmware/components/offgrid_arq/og_sr_usb.c -o "$bridge_bin"
+"$bridge_bin"
+rm -f "$bridge_bin"
+node --check web/lora_bulk.js
+node firmware/tests/test-lora-bulk.cjs
 node --check web/lora_scheduler.js
 node --check web/lora_benchmark.js
 node --check web/lora_receipts.js

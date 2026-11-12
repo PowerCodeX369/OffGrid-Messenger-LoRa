@@ -5,6 +5,7 @@ cd "$(dirname "$0")/../.."
 clang -std=gnu11 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
     -fsyntax-only -DCONFIG_OFFGRID_USB_IRQ_RX=1 \
     -Ifirmware/tests/host_stubs -Ifirmware/main \
+    -Ifirmware/components/offgrid_arq/include \
     -Ifirmware/components/offgrid_sx1278/include firmware/main/main.c
 clang -std=gnu11 -Werror=implicit-function-declaration -Werror=incompatible-pointer-types \
     -fsyntax-only -Ifirmware/tests/host_stubs \
