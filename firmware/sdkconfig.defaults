@@ -1,0 +1,22 @@
+# Correct hardware target. ESP32-C3 Super Mini uses RISC-V, NOT the Xtensa ESP32.
+CONFIG_IDF_TARGET="esp32c3"
+# The ESP32-C3 Super Mini usually exposes native USB Serial/JTAG.
+CONFIG_ESP_CONSOLE_USB_SERIAL_JTAG=y
+# Keep task watchdog enabled; the main task blocks via vTaskDelay.
+
+# Native USB Serial/JTAG IRQ receive; standard fallback remains supported.
+CONFIG_OFFGRID_USB_IRQ_RX=y
+
+CONFIG_BT_ENABLED=y
+CONFIG_BT_BLUEDROID_ENABLED=n
+CONFIG_BT_NIMBLE_ENABLED=y
+CONFIG_BT_NIMBLE_GATT_SERVER=y
+CONFIG_BT_NIMBLE_ATT_PREFERRED_MTU=247
+CONFIG_BT_NIMBLE_ROLE_PERIPHERAL=y
+# Wi-Fi is never started; hardware coexistence is not requested.
+CONFIG_ESP_COEX_SW_COEXIST_ENABLE=n
+
+# Phase 2.0.7: 1.5 MiB factory app; fits in 2 MiB configured flash.
+# Uses firmware/partitions.csv. Keep existing NVS at 0x9000, 0x6000 bytes.
+CONFIG_PARTITION_TABLE_CUSTOM=y
+CONFIG_PARTITION_TABLE_CUSTOM_FILENAME="partitions.csv"
