@@ -1,4 +1,4 @@
-# OffGrid Messenger LoRa — ESP-IDF firmware v1.6.1-rc.1
+# OffGrid Messenger LoRa — ESP-IDF firmware v1.6.1-rc.2
 
 The full ESP32-C3 **LoRa-only** firmware is here, including the main radio owner (`main/main.c`), SX1278 SPI driver (`components/offgrid_sx1278`), authenticated selective-repeat transport (`components/offgrid_arq`), NimBLE bridge, USB Web Serial, and tests. It is **not** a standalone C prototype.
 
@@ -19,7 +19,7 @@ idf.py -p /dev/ttyACM1 flash
 
 ## Power and radio modes
 
-Balanced SF7/BW250/+10 dBm is the boot profile. Fast SF7/BW500/+18 dBm (opt-in) and Max SF9/BW125/+18 dBm (opt-in) use the module-rated nominal 18 dBm high PA_DAC policy after verifying the radio's power supply/antenna/legal limits. **Each board** must explicitly receive `POWER18 VERIFIED` over its own physical USB session before either high-power profile can be selected. `POWER18 OFF` disables future high-power switching once already back in Balanced. The fourth Experimental +22 dBm option is **disabled and rejected** as unsupported by SX1278. Original manual profile OFFER/AGREE and rollback are preserved.
+Balanced SF7/BW250/+10 dBm is the boot profile. Fast SF7/BW500/+18 dBm (opt-in) and Max SF9/BW125/+18 dBm (opt-in) use the module-rated nominal 18 dBm high PA_DAC policy after verifying the radio's power supply/antenna/legal limits. For high-power profiles, the initiating user confirms BOTH devices in the v1.6.1-rc.2 browser. One USB device receives `POWER18 VERIFIED`, then `PROFILE LOW` or `PROFILE MAX`, and forwards the authenticated request containing that confirmation to the other device. The receiving ESP32 follows automatically without its own USB command. `POWER18 OFF` disables future high-power switching once already back in Balanced. There is no Experimental +22 dBm mode; it was removed as unsupported by SX1278. Original manual profile OFFER/AGREE and rollback are preserved.
 
 ## New v1.6 bulk protocol
 
@@ -35,4 +35,8 @@ Run `bash firmware/tests/run-host-tests.sh` from repo root; it includes full C A
 
 `BULKCHUNK` still validates every 160-byte sequence and CRC32, but `BULKSTEP` is emitted once per bounded group of four USB commands (or final partial group). The included browser now pipelines four chunk lines per write. `BULKSTAT|<id>|RF_MS=...|FRAMES=...|RETX=...|TIMEOUT=...` describes *this* transfer, not a cumulative LINK counter. Six SF7 224-byte chunks fit in one radio bitmap window for a 1-KB encrypted probe; SF9 Max stays three. A 25-ms post-TxDone guard provides receiver FIFO/HMAC/IRQ rearm time before the next packet. These are source-level optimizations requiring actual two-board validation; no throughput gain is guaranteed.
 
-**Update both boards and both browser clients.** New READY advertises `FW=1.6.1-rc.1|USBPIPE=4|WINDOW=6`. Do not mix the old per-chunk acknowledgment web client with this grouped acknowledgment firmware. See `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
+**Update both boards and both browser clients.** New READY advertises `FW=1.6.1-rc.2|USBPIPE=4|WINDOW=6|PROFILES=3|SYNC=ONE_CLICK`. Do not mix the old per-chunk acknowledgment web client with this grouped acknowledgment firmware. See `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
+
+## v1.6.1-rc.2 — one-click synchronized control only
+
+No changes to `components/offgrid_arq/`, the SX1278 SPI driver, RX/TX loop, USB ciphertext staging or AES/read-receipt engine. Profile OFFER/AGREE packets include one extra HMAC-covered byte declaring the initiating operator inspected both boards, so a peer follows without separate `POWER18 VERIFIED`. Peers busy with ARQ transfers return an authenticated reject. `PROFILE|ERROR` reports a failed handshake; timed rollback and Balanced-on-reset remain. **Both ESP32s must be upgraded together**, as older v1.6.1-rc.1 control packets are rejected. No new performance result has been measured.

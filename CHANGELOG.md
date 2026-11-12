@@ -1,5 +1,17 @@
 # Changelog
 
+## [1.6.1-rc.2] — 2026-11-13
+
+**Rebuild directly from the last measured working v1.6.1-rc.1 transport. Not based on v1.6.2 or v1.6.3.**
+
+- Repair one-browser manual synchronization: a signed 6-byte OGM2 profile offer/agree contains the initiating operator's confirmation that BOTH ESP32 power supplies and antennas were inspected. The other node follows the authenticated request, without an independent USB `POWER18 VERIFIED` click.
+- Keep the local physical-USB opt-in to initiate Fast/Max, and never overdrive an SX1278. The unsupported fourth +22 dBm mode is removed from firmware and UI.
+- Add bounded response timeout, deduplicated profile responses, and explicit authenticated peer-busy rejection rather than silent waiting. Pause mode changes when the browser still has pending user content; keep rollback and Balanced-on-reboot.
+- **Deliberately do not change** the measured-working v1.6.1 ARQ bridge, six-fragment window, 224-byte payload, 25-ms guard, grouped USB staging, AES-256-GCM, HMAC radio packets, or delivered/read receipt logic. Source-equality checks compare these directly against the original v1.6.1 tag.
+- Regression tests cover frame payload/nonce/consent validation, peer rejection, three profile registers, browser command order and active/rollback states.
+- **Measured reference:** v1.6.1-rc.1 Balanced 457.4 B/s, 1.95 s median RTT, 8/8 confirmed (user). No v1.6.1-rc.2 RF measurement or ESP-IDF 6.1 build is available in the authoring environment.
+
+
 ## [1.6.1-rc.1] — 2026-11-13
 
 **Response to measured v1.6 Fast-mode regression: 358.2 B/s versus v1.5 Fast 487.8 B/s.**
