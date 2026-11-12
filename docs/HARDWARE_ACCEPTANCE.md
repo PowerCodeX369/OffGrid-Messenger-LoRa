@@ -1,3 +1,5 @@
+> v1.6.1-rc.1 is not hardware validated. See [regression test and measured benchmark checklist](V1_6_1_RC1_BOTTLENECK_FIX.md).
+
 > v1.6.0-rc.1 hardware acceptance **NOT YET PASSED**. See [full v1.6 integration and acceptance matrix](V1_6_0_ARQ_INTEGRATION.md). Original historical checklist follows.
 
 # v1.2.0-rc.2 hardware acceptance: NOT YET PASSED

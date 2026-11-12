@@ -1,5 +1,19 @@
 # Changelog
 
+## [1.6.1-rc.1] — 2026-11-13
+
+**Response to measured v1.6 Fast-mode regression: 358.2 B/s versus v1.5 Fast 487.8 B/s.**
+
+- Batch 160-byte encrypted USB stage commands in bounded four-line writes; checkpoint after every group rather than after every chunk, preserving sequence/CRC32 checks. A 1-KB ciphertext requires 4 USB stage round trips rather than 9.
+- Use six-frame bitmap window for SF7 500/250 kHz (three for slower Max); 1-KB AES-GCM probes fit one 5-fragment window and one bitmap ACK rather than two bursts.
+- Add a receiver-rearm guard of 25 ms after TxDone instead of 3 ms to reduce very-short-preamble missed frames. This is a conservative hypothesis pending per-transfer retry data, not a measured fix.
+- Forward completed encrypted RX over USB in bounded groups of four, reducing radio-loop polls.
+- Add per-transfer `BULKSTAT` RF duration, frames/retransmissions/ACK timeout counts and benchmark separation of USB staging vs RF confirmation vs encrypted end-to-end RTT.
+- Maintain AES-256-GCM chat/receipt, HMAC-SHA256 radio data/ACK, manual modes, hardware-safe PA policy, disabled +22 dBm, BLE, and frozen Android. No automatic switching or media enablement.
+- Host regression tests and browser UI checks pass; **ESP-IDF 6.1 full build and physical v1.6.1 benchmark still pending**. Do not claim field speed improvement.
+- [Engineering review / hardware acceptance](docs/V1_6_1_RC1_BOTTLENECK_FIX.md).
+
+
 ## [1.6.0-rc.1] — 2026-11-13
 
 **Complete firmware + web integration of selective-repeat authenticated LoRa transport. Hardware acceptance pending.**

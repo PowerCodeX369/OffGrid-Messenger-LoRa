@@ -1,8 +1,10 @@
 # OffGrid Messenger LoRa
 
-**v1.6.0-rc.1 — encrypted off-grid text messenger with integrated selective-repeat LoRa transport**
+**v1.6.1-rc.1 — pipelined USB, six-frame SF7 ARQ window, receiver-rearm guard and benchmark timings**
 
 Independent SX1278/Ra-02 + ESP32-C3 Super Mini firmware, browser messenger, source/test history, and preserved original Android application. Maintained under PowerCodeX. This is **LoRa-only** firmware: no Wi-Fi or ESP-NOW initialization; the original ESP-NOW repository is separate and unchanged.
+
+> **Performance regression:** v1.6.0-rc.1 measured **358.2 B/s / 2.63 s median RTT** in Fast mode, worse than the v1.5 Fast result of **487.8 B/s / 2.07 s**. v1.6.1-rc.1 targets USB stage handshakes, 4+1 double-ACK overhead and short interframe gaps. **No v1.6.1 physical measurement exists yet.** See [v1.6.1 bottleneck repair and acceptance](docs/V1_6_1_RC1_BOTTLENECK_FIX.md).
 
 > **Release status: SOURCE CANDIDATE.** Host C/JavaScript tests, two-node simulated loss-injection, and browser UI checks pass, but I have **not** completed an ESP-IDF 6.1 firmware build or a physical two-radio v1.6 benchmark. Keep your last working v1.5.0-rc.1 firmware and browser backup. Never treat a source candidate as field-certified or assume improved transfer speeds before measuring them.
 
@@ -10,7 +12,7 @@ Independent SX1278/Ra-02 + ESP32-C3 Super Mini firmware, browser messenger, sour
 
 - AES-256-GCM end-to-end encrypted text, local encrypted message history, authenticated delivered/read receipts and correct single/double/blue ticks. The radio only sees encrypted OGM4 ciphertext plus authenticated but visible RF metadata.
 - Dedicated ESP32-C3 SX1278 LoRa worker and 433 MHz manual three-profile system. Manual, authenticated peer offer/agree and timed rollback remain; reboot returns to Balanced.
-- **Integrated v1.6 selective-repeat engine:** transfer encrypted ciphertext in one bounded USB bulk transaction; send up to four **224-byte ciphertext RF fragments** as a burst, then one HMAC-authenticated bitmap ACK; retransmit only missing fragments. RF frames are max **254 bytes** including header and 16-byte radio tag, within SX1278 FIFO's 255-byte limit.
+- **Integrated v1.6 selective-repeat engine:** transfer encrypted ciphertext in one bounded USB bulk transaction; send up to six **224-byte ciphertext RF fragments** per SF7 burst (three in slow Max Range), then one HMAC-authenticated bitmap ACK; retransmit only missing fragments. RF frames are max **254 bytes** including header and 16-byte radio tag, within SX1278 FIFO's 255-byte limit.
 - **Real encrypted LoRa speed test** in browser Settings (64–1024-byte probes, multiple trials, application goodput, median/p95 RTT, confirmed/unconfirmed). No fake raw-PHY throughput claims.
 - USB Web Serial and existing NimBLE service preserved in firmware. BLE/Android app is **not connected to the new v1.6 bulk transport**, and voice/images/video remain disabled pending further reliability and throughput testing.
 - New v1.6 authenticated peer-capability handshake: both radios must be updated; old v1.5 peers do not silently accept the incompatible new ARQ data frames.
@@ -58,7 +60,7 @@ idf.py -p /dev/ttyACM0 flash
 idf.py -p /dev/ttyACM1 flash
 ```
 
-**Do not run `erase-flash`** unless you intend to reset your stored shared pairing key. The firmware and web clients must all be **v1.6**; it changes the radio frame format and USB transfer commands. Older v1.5 is not wire-compatible with this release's ARQ payloads.
+**Do not run `erase-flash`** unless you intend to reset your stored shared pairing key. The firmware and web clients must all be **v1.6.1-rc.1**; it changes the radio frame format and USB transfer commands. Older v1.5 is not wire-compatible with this release's ARQ payloads.
 
 ## Run the encrypted web messenger
 
@@ -68,9 +70,9 @@ From the repository root, serve **this archive's `web/`** directory:
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Open <http://127.0.0.1:8765> in a current desktop Chrome/Edge with Web Serial. Open a separate browser session/tab for each connected ESP32, grant USB access, and use the same 32-byte pairing key on both nodes. Check `READY` contains `FW=1.6.0-rc.1|ARQ=1|BULK=1|PROFILES=4` and, after discovery, `LINK` shows `PEER_ARQ=1`. Make a short text test before running bursts or switching modes.
+Open <http://127.0.0.1:8765> in a current desktop Chrome/Edge with Web Serial. Open a separate browser session/tab for each connected ESP32, grant USB access, and use the same 32-byte pairing key on both nodes. Check `READY` contains `FW=1.6.1-rc.1|ARQ=1|BULK=1|PROFILES=4` and, after discovery, `LINK` shows `PEER_ARQ=1`. Make a short text test before running bursts or switching modes.
 
-The web application uses `web/lora_bulk.js` to stage the entire AES-GCM-encrypted transfer in 160-byte USB chunks; the ESP32 then owns RF 224-byte fragments. Normal radio ACKs mean RF reception only. The receiver browser must **decrypt and authenticate** the OGM4 envelope before issuing a delivered receipt. Read receipts depend on actual browser viewing. Missing application confirmations are shown as unconfirmed, never falsely delivered.
+The web application uses `web/lora_bulk.js` to stage AES-GCM ciphertext in bounded **four-command USB batches**, acknowledging each batch instead of each chunk; the ESP32 then owns RF 224-byte fragments. Normal radio ACKs mean RF reception only. The receiver browser must **decrypt and authenticate** the OGM4 envelope before issuing a delivered receipt. Read receipts depend on actual browser viewing. Missing application confirmations are shown as unconfirmed, never falsely delivered.
 
 For comparisons, run Settings → **LoRa speed test**, ideally 8 × 1024-byte encrypted probes, in Balanced first. Record profile, goodput, p50/p95 RTT, confirmed/lost, `ARQ_RETX`, `ARQ_ACKTX`, `ARQ_TIMEOUT`, `ARQ_BADMAC`. The user's measured v1.5 Fast baseline was ~**487.8 bytes/s / 2.07 s median RTT** (8/8 confirmations), **not a v1.6 result**. No v1.6 throughput claims are made until measured on the two devices.
 
@@ -83,7 +85,8 @@ For comparisons, run Settings → **LoRa speed test**, ideally 8 × 1024-byte en
 | v1.2.0-rc.1 | Burst scheduler and LoRa speed test; first firmware channel-busy regression discovered |
 | v1.2.0-rc.2 | Revert blocking pre-transmit CAD gate, restore reliable direct TX path |
 | v1.5.0-rc.1 | Three manually coordinated modulation/range profiles and measured 1KB benchmarks; no v1.3/v1.4 published |
-| **v1.6.0-rc.1** | Integrated bounded 224B selective-repeat ARQ, bitmap ACK, USB ciphertext staging, safe 18 dBm opt-in and disabled experimental +22 |
+| **v1.6.0-rc.1** | Integrated bounded 224B selective-repeat ARQ, bitmap ACK, USB ciphertext staging, safe 18 dBm opt-in and disabled experimental +22; field benchmark showed slowdown |
+| **v1.6.1-rc.1** | Four-line pipelined USB staging, six-frame SF7 bitmap windows, 25-ms interframe RX guard, RF/USB benchmark timings; hardware acceptance pending |
 
 `firmware/main/` holds the ESP-IDF startup, LoRa radio worker, USB and NimBLE integration. `firmware/components/offgrid_sx1278/` is the SPI driver. **`firmware/components/offgrid_arq/` is the new real firmware transport component**. `web/` contains the actual browser messenger. `android/` is preserved, **not v1.6 LoRa-compatible yet**. `firmware/tests/`, `tests/`, `docs/`, `.github/` contain host checks and instructions. `SOURCE_MANIFEST.sha256` pins tracked source integrity. The `.git` archive and portable Git bundle include the full LoRa project history.
 
@@ -97,6 +100,6 @@ bash firmware/tests/run-host-tests.sh
 python3 tests/test_v15_web_smoke.py
 ```
 
-These exercise actual ARQ bridge code on two simulated endpoints with deliberately lost DATA and bitmap ACK frames, 1KB/4KB/7168B ciphertext, browser CRC32 handling, message/receipt cryptography and SX1278 register choices. They **do not** certify that the two physical Ra-02 modules communicate, the ESP-IDF project builds, BLE supports v1.6 bulk traffic, or max PA operation is safe. See **[v1.6 transport protocol and physical acceptance checklist](docs/V1_6_0_ARQ_INTEGRATION.md)**. Text-only and one transfer at a time is intentional; larger media/voice require streaming, scheduling and physical validation first.
+These exercise actual ARQ bridge code on two simulated endpoints with deliberately lost DATA and bitmap ACK frames, 1KB/4KB/7168B ciphertext, browser CRC32 handling, message/receipt cryptography and SX1278 register choices. They **do not** certify that the two physical Ra-02 modules communicate, the ESP-IDF project builds, BLE supports v1.6 bulk traffic, or max PA operation is safe. See **[v1.6.1 targeted performance regression review](docs/V1_6_1_RC1_BOTTLENECK_FIX.md)**. Text-only and one transfer at a time is intentional; larger media/voice require streaming, scheduling and physical validation first.
 
 Contributions: [CONTRIBUTING.md](CONTRIBUTING.md). Security: [SECURITY.md](SECURITY.md). Detailed changes: [CHANGELOG.md](CHANGELOG.md). License: [GPL-3.0](LICENSE). No GitHub push has been performed. Never publish raw pairing keys, NVS images or device secrets.
