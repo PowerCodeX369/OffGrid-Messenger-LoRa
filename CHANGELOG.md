@@ -1,5 +1,16 @@
 # Changelog
 
+## [1.2.0-rc.2] — 2026-11-12
+
+**TX recovery candidate; the prior rc.1 was reported to stop sending messages.**
+
+- Roll back the new rc.1 modem-status/CAD gate from the active data-transmit path. Restore the v1.1 radio send/retry path without changing radio parameters, browser framing, authentication, priorities, or pairing keys.
+- Add a source regression guarding against reintroducing blocking CAD before the send call.
+- Retain the v1.2 browser scheduling, encrypted receipt batching and speed test.
+- **No hardware validation performed.** If TX remains broken, revert both firmware and web to v1.1.0-rc.1, the user's last observed working release.
+- Details: [TX recovery / acceptance](docs/V1_2_0_RC2_TX_RECOVERY.md).
+
+
 ## [1.2.0-rc.1] — 2026-11-12
 
 **LoRa burst-scheduling and encrypted speed-test release candidate.**

@@ -1,8 +1,10 @@
 # OffGrid Messenger LoRa
 
-**Version 1.2.0-rc.1 — LoRa burst reliability and encrypted speed-test candidate**
+**Version 1.2.0-rc.2 — TX recovery candidate (rolls back unverified pre-TX CAD gate)**
 
 Offline, direct peer-to-peer **encrypted text** over two SX1278 Ra-02 transceivers, controlled by a local Chromium Web Serial interface. The firmware **does not initialize Wi-Fi or ESP-NOW**. NimBLE and native USB Serial/JTAG are enabled. This project is a separate derivative of the original [OffGrid Messenger (ESP-NOW)](https://github.com/PowerCodeX369/OffGrid-Messenger), not its replacement.
+
+> **Important recovery information:** v1.2.0-rc.1 was reported unable to send messages. rc.2 removes the new transmit-blocking CAD gate but still needs two-board validation. **If rc.2 fails, restore v1.1.0-rc.1 with its matching web client and share both nodes' diagnostic output.** See [rc.2 TX recovery notes](docs/V1_2_0_RC2_TX_RECOVERY.md).
 
 > **Validation status:** Host-side C and JavaScript regression checks passed. The new integrated firmware has **not** been compiled with a real ESP-IDF 6.1 toolchain or run on two physical ESP32s in the authoring environment. **This v1.2.0 candidate is not yet a hardware-validated release.** Do not count links or ACKs as proven until both boards pass the acceptance checklist.
 
@@ -66,7 +68,7 @@ From the repository root:
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Open **http://127.0.0.1:8765** in Chrome/Edge. Open separate browser windows for the two USB-attached nodes. Connect each device and set the **same 256-bit pairing key** on both. Create the key on one node, copy it locally and install it on the other (key export is restricted to the physical USB connection). The LoRa transmitter will not send user data before a pairing key is configured. The firmware reports `READY|...|FAMILY=LORA|FW=1.2.0-rc.1|FLOW=2`, and the driver reports `RADIO|SX1278_READY` after successful initialization.
+Open **http://127.0.0.1:8765** in Chrome/Edge. Open separate browser windows for the two USB-attached nodes. Connect each device and set the **same 256-bit pairing key** on both. Create the key on one node, copy it locally and install it on the other (key export is restricted to the physical USB connection). The LoRa transmitter will not send user data before a pairing key is configured. The firmware reports `READY|...|FAMILY=LORA|FW=1.2.0-rc.2|FLOW=2`, and the driver reports `RADIO|SX1278_READY` after successful initialization.
 
 **Do not confuse:** USB `Connected` with a working radio peer. `LINK` shows authenticated RX and radio ACK counters. See [hardware acceptance](docs/HARDWARE_ACCEPTANCE.md).
 
@@ -79,7 +81,7 @@ Open **http://127.0.0.1:8765** in Chrome/Edge. Open separate browser windows for
 - The receiving browser sends its USB-only `APPACK` *after complete AES-GCM decryption*. The firmware does **not** send a redundant fragment-delivered radio packet.
 - **Double gray** comes only from an encrypted delivered receipt, **double blue** only from an encrypted read receipt after the recipient actually views the chat. A lost receipt leaves an explicit *unconfirmed* state; it is not proof of non-delivery.
 - `CTRLHEX` carries encrypted delivered/read controls at higher radio queue priority; at most one unacknowledged LoRa radio frame is transmitted at a time. A longer end-to-end watchdog is distinct from the radio ACK timeout.
-- SX1278 modem-status polling checks for an ongoing reception before best-effort CAD; short randomized deferrals reduce avoidable half-duplex collisions but cannot prevent all collisions.
+- The v1.2.0-rc.1 pre-TX modem-status/CAD gate was removed in rc.2 after a report that messages stopped sending. Normal data transmission uses the previously working v1.1 send path; scheduling is still serialized and ACKs remain prioritized. This is a source-level rollback, **not yet a hardware-confirmed cure**.
 - Delivered/read receipts are AES-GCM-encrypted priority batches of up to eight receipt entries; each entry still has a distinct message ID and read/delivery meaning.
 - The web client has a **real encrypted LoRa speed test** (64–1024-byte probes) under Settings. It reports application goodput, median/p95 RTT, and confirmed versus unconfirmed trials; it does not claim raw RF throughput.
 - SPI FIFO bursts require SPI DMA on ESP-IDF. The maximum 218-byte frame has host emulation tests; hardware build verification is pending.

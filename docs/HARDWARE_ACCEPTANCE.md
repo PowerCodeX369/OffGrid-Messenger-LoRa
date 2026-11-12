@@ -1,4 +1,4 @@
-# v1.2.0-rc.1 hardware acceptance: NOT YET PASSED
+# v1.2.0-rc.2 hardware acceptance: NOT YET PASSED
 
 **Current evidence:** Existing Ra-02 modules passed earlier standalone SPI/GPIO and two-way RF tests using other firmware. That evidence does **not** certify the v1.2 radio engine or its browser ACK chain.
 
