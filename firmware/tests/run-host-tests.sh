@@ -61,4 +61,4 @@ python3 tests/test_rc2_send_path.py
 python3 tests/test_boundaries.py
 python3 tests/test_v15_profile.py
 python3 tests/test_v161_rc2_regression.py
-if command -v clang >/dev/null 2>&1; then firmware/tests/run-syntax-checks.sh; fi
+if command -v clang >/dev/null 2>&1; then sh firmware/tests/run-syntax-checks.sh; fi
