@@ -9,9 +9,8 @@ int main(void) {
         .frequency_hz=433000000,.bandwidth=OFFGRID_SX1278_BW_500_KHZ,
         .spreading_factor=7,.coding_denominator=5,.tx_power_dbm=22,
         .sync_word=0x2d,.preamble_symbols=8,.high_pa_dac=true}));
-    assert(og_mode_parse("EXPERIMENTAL")==OG_MODE_EXPERIMENTAL);
-    const offgrid_sx1278_profile_t unsupported=og_mode_profile(OG_MODE_EXPERIMENTAL);
-    assert(!offgrid_sx1278_profile_valid(&unsupported));
+    assert(og_mode_parse("EXPERIMENTAL")==0);
+    assert(og_mode_parse("22")==0);
     assert(og_mode_parse("LOW")==OG_MODE_LOW);
     assert(og_mode_parse("BALANCED")==OG_MODE_BALANCED);
     assert(og_mode_parse("MAX")==OG_MODE_MAX);
@@ -43,7 +42,7 @@ int main(void) {
         .spreading_factor=7,.coding_denominator=5,.tx_power_dbm=22,
         .sync_word=0x2d,.preamble_symbols=8,.high_pa_dac=true})); /* No experimental +20/+22 dBm path */
     max.tx_power_dbm=20; assert(!offgrid_sx1278_profile_valid(&max));
-    og_frame_t offer={.magic=OG_MAGIC,.version=OG_VERSION,.type=OG_TYPE_PROFILE_OFFER,.length=5};
+    og_frame_t offer={.magic=OG_MAGIC,.version=OG_VERSION,.type=OG_TYPE_PROFILE_OFFER,.length=6};
     offer.data[0]=OG_MODE_MAX;
     assert(og_wire_valid(&offer,og_wire_length(&offer)));
     offer.type=OG_TYPE_PROFILE_AGREE;

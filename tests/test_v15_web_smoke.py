@@ -21,8 +21,33 @@ with sync_playwright() as playwright:
     page.locator('#settingsButton').click()
     page.get_by_role('button', name='Manual LoRa profiles').click()
     text = page.locator('#modalBody').inner_text()
-    for phrase in ['Fast / Nominal','Balanced','Max Power','500 kHz','250 kHz','125 kHz','18 dBm','22 dBm']:
+    for phrase in ['Fast / Nominal','Balanced','Max Power','500 kHz','250 kHz','125 kHz','18 dBm']:
         assert phrase in text, (phrase, text)
+    assert 'Experimental' not in text, text
+    outcome = page.evaluate("""async () => {
+      verified=true;
+      writer={};
+      secretKey=new Uint8Array(32);
+      let confirms=0;
+      window.confirm=()=>{confirms++;return true};
+      const commands=[];
+      writeLine=async line=>{commands.push(line)};
+      await requestProfileChange('LOW');
+      const queued=commands.slice();
+      onProfileLine('PROFILE|NEGOTIATING|LOW|MANUAL=1');
+      onProfileLine('PROFILE|AGREED|LOW');
+      onProfileLine('PROFILE|VERIFYING|LOW');
+      onProfileLine('PROFILE|ACTIVE|LOW|SF=7|BW=500000|TX_DBM=18|AUTO=0');
+      const active=currentProfile;
+      const pending=profileTransition;
+      onProfileLine('PROFILE|PEER_REQUEST|BALANCED');
+      onProfileLine('PROFILE|ACTIVE|BALANCED|SF=7|BW=250000|TX_DBM=10|AUTO=0');
+      return {commands:queued,confirms,active,pending,finalMode:currentProfile,finalPending:profileTransition};
+    }""")
+    assert outcome['commands']==['POWER18 VERIFIED','PROFILE LOW'], outcome
+    assert outcome['confirms']==1, outcome
+    assert outcome['active']=='LOW' and not outcome['pending'], outcome
+    assert outcome['finalMode']=='BALANCED' and not outcome['finalPending'], outcome
     assert not errors, errors
     print('PASS: in-memory Chromium profile modal (no USB/RF test)')
     browser.close()

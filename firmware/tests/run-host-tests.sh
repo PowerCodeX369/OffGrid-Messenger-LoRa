@@ -16,6 +16,12 @@ cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
     firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c -o "$mode_bin"
 "$mode_bin"
 rm -f "$mode_bin"
+profile_bin=/tmp/offgrid-lora-profile-switch-$$
+cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
+   -Ifirmware/components/offgrid_sx1278/include \
+   firmware/tests/test_profile_switch.c -o "$profile_bin"
+"$profile_bin"
+rm -f "$profile_bin"
 fifo_bin=/tmp/offgrid-lora-fifo-$$
 cc -std=c11 -Wall -Wextra -Werror -Wno-unused-variable \
     -Ifirmware/tests/host_stubs -Ifirmware/components/offgrid_sx1278/include \
@@ -54,4 +60,5 @@ node firmware/tests/test-lora-receipts.cjs
 python3 tests/test_rc2_send_path.py
 python3 tests/test_boundaries.py
 python3 tests/test_v15_profile.py
+python3 tests/test_v161_rc2_regression.py
 if command -v clang >/dev/null 2>&1; then firmware/tests/run-syntax-checks.sh; fi
