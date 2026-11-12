@@ -24,6 +24,7 @@
 #define OG_TYPE_PROFILE_OFFER 9u
 #define OG_TYPE_PROFILE_AGREE 10u
 #define OG_TYPE_ARQ_CAPS 11u
+#define OG_TYPE_PROFILE_REJECT 12u
 
 /* Packed representation intentionally preserves the original OGM2 packet header.
  * Both ESP32-C3 devices use the same little-endian frame layout. */
@@ -47,10 +48,11 @@ static inline bool og_wire_valid(const og_frame_t *f, size_t n) {
         f->type != OG_TYPE_READ && f->type != OG_TYPE_HELLO &&
         f->type != OG_TYPE_RADIO_ACK &&
         f->type != OG_TYPE_PROFILE_OFFER && f->type != OG_TYPE_PROFILE_AGREE &&
-        f->type != OG_TYPE_ARQ_CAPS) return false;
+        f->type != OG_TYPE_ARQ_CAPS && f->type != OG_TYPE_PROFILE_REJECT) return false;
     if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 && f->data[0]==1;
-    if(f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE)
-        return f->length==5 && f->data[0]>=1 && f->data[0]<=3;
+    if(f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE ||
+       f->type==OG_TYPE_PROFILE_REJECT)
+        return f->length==6 && f->data[0]>=1 && f->data[0]<=3;
     return f->type == OG_TYPE_DATA ? f->length > 0 : f->length == 0;
 }
 static inline size_t og_wire_length(const og_frame_t *f) {

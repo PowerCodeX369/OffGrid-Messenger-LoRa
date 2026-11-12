@@ -1,5 +1,5 @@
 /*
- * OffGrid Messenger LoRa v1.6.1-rc.1 / ESP32-C3 + SX1278 Ra-02
+ * OffGrid Messenger LoRa v1.6.1-rc.2 / ESP32-C3 + SX1278 Ra-02
  *
  * No esp_wifi_init, no esp_now_init, no Wi-Fi event loop, no Wi-Fi tasks.
  * BLE (NimBLE) and native USB continue to serve the existing OGM4 client.
@@ -24,6 +24,7 @@
 #include "lora_wire.h"
 #include "lora_schedule.h"
 #include "lora_modes.h"
+#include "lora_profile_control.h"
 #include "og_arq_bridge.h"
 #include "offgrid_sx1278.h"
 #include "esp_err.h"
@@ -175,16 +176,10 @@ static bool profile_has_pending(void) {
     return false;
 }
 static og_frame_t profile_frame(uint8_t type, uint8_t target, uint32_t session, uint32_t nonce) {
-    og_frame_t f={0};f.magic=OG_MAGIC;f.version=OG_VERSION;f.type=type;
-    memcpy(f.sender,own_mac,6);f.session=session;f.id=nonce;f.length=5;
-    f.data[0]=target;
-    for(int i=0;i<4;i++)f.data[i+1]=(uint8_t)(nonce>>(8*i));
-    return f;
+    return og_profile_control_frame(type,target,own_mac,session,nonce);
 }
 static bool profile_nonce_valid(const og_frame_t *f) {
-    uint32_t n=0;
-    for(int i=0;i<4;i++)n|=(uint32_t)f->data[i+1]<<(8*i);
-    return f->length==5 && n==f->id && f->data[0]>=OG_MODE_LOW && f->data[0]<=OG_MODE_MAX;
+    return og_profile_control_valid(f);
 }
 static void output(const char *fmt, ...) {
     char line[540];va_list ap;va_start(ap,fmt);
@@ -356,9 +351,10 @@ static og_frame_t new_frame(uint8_t type, uint32_t session,uint32_t id) {
  * Dedupe repeated ACKs for the same frame. This queue is owned by radio_loop.
  */
 static bool control_add(const og_frame_t *f,uint32_t delay_ms) {
-    if(f->type==OG_TYPE_RADIO_ACK){
+    if(f->type==OG_TYPE_RADIO_ACK || f->type==OG_TYPE_PROFILE_AGREE ||
+       f->type==OG_TYPE_PROFILE_REJECT){
         for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(
-            controls[i].frame.magic && controls[i].frame.type==OG_TYPE_RADIO_ACK &&
+            controls[i].frame.magic && controls[i].frame.type==f->type &&
             controls[i].frame.session==f->session && controls[i].frame.id==f->id){
             int64_t target=millis()+delay_ms;
             if(target<controls[i].due_ms)controls[i].due_ms=target;
@@ -369,8 +365,10 @@ static bool control_add(const og_frame_t *f,uint32_t delay_ms) {
         controls[i].frame=*f;controls[i].due_ms=millis()+delay_ms;return true;
     }
     /* Best-effort HELLO traffic must never displace a real radio ACK. */
-    if(f->type==OG_TYPE_RADIO_ACK || f->type==OG_TYPE_PROFILE_AGREE){
-        for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_HELLO){
+    if(f->type==OG_TYPE_RADIO_ACK || f->type==OG_TYPE_PROFILE_AGREE ||
+       f->type==OG_TYPE_PROFILE_REJECT){
+        for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_HELLO ||
+                                              controls[i].frame.type==OG_TYPE_ARQ_CAPS){
             controls[i].frame=*f;controls[i].due_ms=millis()+delay_ms;return true;
         }
     }
@@ -407,7 +405,7 @@ static void profile_reset_pending(void) {
 }
 static void profile_start_offer(uint8_t target, bool force) {
     if(!radio_key_ready||!sx){output("PROFILE|ERROR|RADIO_NOT_READY\n");return;}
-    if(target==OG_MODE_EXPERIMENTAL){output("PROFILE|ERROR|22_DBM_UNSUPPORTED_BY_SX1278\n");return;}
+    if(!og_profile_mode_valid(target)){output("PROFILE|ERROR|INVALID_MODE\n");return;}
     if((target==OG_MODE_LOW||target==OG_MODE_MAX)&&!high_pa_verified){
         output("PROFILE|ERROR|18_DBM_REQUIRES_LOCAL_POWER_VERIFICATION\n");return;
     }
@@ -437,6 +435,15 @@ static bool profile_apply(uint8_t mode) {
 }
 static void profile_service(void) {
     const int64_t now=millis();
+    if(profile_state.phase==OG_PROFILE_RESPONDING && now>=profile_state.retry_at_ms){
+        for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(
+            controls[i].frame.magic && controls[i].frame.type==OG_TYPE_PROFILE_AGREE &&
+            controls[i].frame.id==profile_state.nonce &&
+            controls[i].frame.session==profile_state.offer_session)
+                controls[i].frame.magic=0;
+        profile_state.phase=OG_PROFILE_IDLE;
+        output("PROFILE|ERROR|AGREE_RESPONSE_TIMEOUT\n");
+    }
     if(profile_state.phase==OG_PROFILE_OFFERING && now>=profile_state.retry_at_ms){
         if(profile_state.attempts>=5){
             profile_state.phase=OG_PROFILE_IDLE;
@@ -485,7 +492,7 @@ static void profile_service(void) {
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.6.1-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.6.1-rc.2|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -552,8 +559,16 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
     }
     if(f.type==OG_TYPE_PROFILE_OFFER){
         if(!profile_nonce_valid(&f))return;
-        if((f.data[0]==OG_MODE_LOW||f.data[0]==OG_MODE_MAX)&&!high_pa_verified)return;
-        if(profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
+        /* Already authenticated by radio_hmac. The explicit operator consent
+         * for BOTH radio boards is carried in the signed sixth byte. A peer
+         * follows this manual request without needing a second USB command. */
+        if(profile_state.phase==OG_PROFILE_IDLE && profile_has_pending()){
+            og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
+            (void)control_add(&reject,30+(esp_random()%25));
+            output("PROFILE|PEER_BUSY|%s\n",og_mode_name(f.data[0]));
+            return;
+        }
+        if(profile_state.phase==OG_PROFILE_IDLE){
             if(last_profile_offer_valid && f.id==last_profile_offer_nonce &&
                f.session==last_profile_offer_session &&
                !memcmp(f.sender,last_profile_offer_mac,6))return;
@@ -565,6 +580,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
             profile_state.target=f.data[0];
             profile_state.nonce=f.id;profile_state.offer_session=f.session;
             profile_state.phase=OG_PROFILE_RESPONDING;
+            profile_state.retry_at_ms=millis()+3500;
             output("PROFILE|PEER_REQUEST|%s\n",og_mode_name(profile_state.target));
         }
         if(profile_state.phase==OG_PROFILE_RESPONDING &&
@@ -572,6 +588,15 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
            profile_state.target==f.data[0]){
             og_frame_t ack=profile_frame(OG_TYPE_PROFILE_AGREE,profile_state.target,f.session,f.id);
             (void)control_add(&ack,30+(esp_random()%25));
+        }
+        return;
+    }
+    if(f.type==OG_TYPE_PROFILE_REJECT){
+        if(profile_state.phase==OG_PROFILE_OFFERING && profile_nonce_valid(&f) &&
+           profile_state.nonce==f.id && profile_state.offer_session==f.session &&
+           profile_state.target==f.data[0]){
+            profile_state.phase=OG_PROFILE_IDLE;
+            output("PROFILE|ERROR|PEER_BUSY_FINISH_TRANSFERS_AND_RETRY\n");
         }
         return;
     }
@@ -734,8 +759,10 @@ static void service_queues(void) {
             if(!f->magic || now<controls[i].due_ms)continue;
             if(profile_state.phase==OG_PROFILE_VERIFYING ||
                (profile_state.phase!=OG_PROFILE_IDLE &&
-                f->type!=OG_TYPE_RADIO_ACK && f->type!=OG_TYPE_PROFILE_AGREE))continue;
+                f->type!=OG_TYPE_RADIO_ACK && f->type!=OG_TYPE_PROFILE_AGREE &&
+                f->type!=OG_TYPE_PROFILE_REJECT))continue;
             const int rank=(f->type==OG_TYPE_RADIO_ACK)?0:
+                           (f->type==OG_TYPE_PROFILE_AGREE || f->type==OG_TYPE_PROFILE_REJECT)?1:
                            (f->type==OG_TYPE_HELLO?2:1);
             if(rank!=priority || (waiting_for_ack && rank!=0))continue;
             if(arq.tx_used && peer_arq_seen && f->type==OG_TYPE_ARQ_CAPS)continue;
@@ -925,7 +952,7 @@ static void parse_line(const char *line,bool ble) {
     if(!strcmp(line,"STATUS")){c.type=CMD_STATUS;queue_command(&c);return;}
     if(!strcmp(line,"HELP")){output("HELP|BULKBEGIN,BULKCHUNK,BULKEND,STATUS,PROFILE,POWER18 VERIFIED,KEYGET,KEYSET,KEYSTATUS,CAPS\n");return;}
     if(!strcmp(line,"CAPS") || !strcmp(line,"CAPS?")){
-        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=MANUAL4_EXPERIMENTAL22_BLOCKED|ARQ=1|BULK=1|TEXT=1|PHOTO=0|VOICE=0|WIFI=0|BLE=1\n");return;
+        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=MANUAL3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=0|VOICE=0|WIFI=0|BLE=1\n");return;
     }
     if(!strcmp(line,"POWER18 VERIFIED")){
         if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
@@ -943,7 +970,6 @@ static void parse_line(const char *line,bool ble) {
         if(!mode||fields<1||(fields==2&&strcmp(extra,"FORCE"))){
             output("PROFILE|ERROR|INVALID_MODE\n");return;
         }
-        if(mode==OG_MODE_EXPERIMENTAL){output("PROFILE|ERROR|22_DBM_UNSUPPORTED_BY_SX1278\n");return;}
         c.type=CMD_PROFILE;c.profile_target=mode;
         c.force_profile=(fields==2);
         queue_command(&c);return;
@@ -1049,7 +1075,7 @@ void app_main(void) {
 #else
     puts("USBMODE|LEGACY");
 #endif
-    puts("BOOT|OffGrid Messenger LoRa v1.6.1-rc.1 (Wi-Fi and ESP-NOW excluded)");
+    puts("BOOT|OffGrid Messenger LoRa v1.6.1-rc.2 (Wi-Fi and ESP-NOW excluded)");
     esp_err_t e=nvs_flash_init();
     if(e==ESP_ERR_NVS_NO_FREE_PAGES || e==ESP_ERR_NVS_NEW_VERSION_FOUND){
         /* This is a standard ESP-IDF NVS recovery path. It erases NVS only
