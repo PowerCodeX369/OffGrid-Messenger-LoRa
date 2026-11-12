@@ -30,7 +30,7 @@ enum {
     REG_PA_CONFIG = 0x09, REG_OCP = 0x0B,
     REG_FIFO_ADDR_PTR = 0x0D, REG_FIFO_TX_BASE = 0x0E,
     REG_FIFO_RX_BASE = 0x0F, REG_FIFO_RX_CURRENT = 0x10,
-    REG_IRQ_FLAGS = 0x12, REG_RX_BYTES = 0x13,
+    REG_IRQ_FLAGS = 0x12, REG_RX_BYTES = 0x13, REG_MODEM_STAT = 0x18,
     REG_PKT_SNR = 0x19, REG_PKT_RSSI = 0x1A,
     REG_MODEM_CONFIG1 = 0x1D, REG_MODEM_CONFIG2 = 0x1E,
     REG_PREAMBLE_MSB = 0x20, REG_PREAMBLE_LSB = 0x21,
@@ -294,6 +294,17 @@ static esp_err_t wait_flag(offgrid_sx1278_t *r, uint8_t expected,
         if (esp_timer_get_time() >= until) return ESP_ERR_TIMEOUT;
         vTaskDelay(1); /* Always yield at least one FreeRTOS tick. */
     }
+}
+
+esp_err_t offgrid_sx1278_rx_busy(offgrid_sx1278_t *r, bool *busy)
+{
+    if (r == NULL || busy == NULL) return ESP_ERR_INVALID_ARG;
+    /* Do not switch to CAD while the SX1278 is synchronizing or decoding a
+     * real packet. This read preserves RX_CONTINUOUS and its FIFO state. */
+    uint8_t status = 0;
+    const esp_err_t err = read_reg(r, REG_MODEM_STAT, &status);
+    if (err == ESP_OK) *busy = (status & 0x0FU) != 0;
+    return err;
 }
 
 esp_err_t offgrid_sx1278_cad(offgrid_sx1278_t *r,

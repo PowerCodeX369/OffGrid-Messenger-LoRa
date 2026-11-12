@@ -54,6 +54,9 @@ esp_err_t offgrid_sx1278_open(const offgrid_sx1278_pins_t *pins,
                               offgrid_sx1278_t **out);
 esp_err_t offgrid_sx1278_set_profile(offgrid_sx1278_t *radio,
                                      const offgrid_sx1278_profile_t *profile);
+/* Read RX-mode modem status without interrupting an in-progress packet.
+ * Bits reflect LoRa signal/preamble/header activity; not a general RF scanner. */
+esp_err_t offgrid_sx1278_rx_busy(offgrid_sx1278_t *radio, bool *busy);
 /* Receiver-only channel activity detection (not a packet send). */
 esp_err_t offgrid_sx1278_cad(offgrid_sx1278_t *radio,
                               bool *activity_detected, uint32_t timeout_ms);

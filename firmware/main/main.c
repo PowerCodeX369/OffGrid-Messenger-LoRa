@@ -1,5 +1,5 @@
 /*
- * OffGrid Messenger LoRa v1.1.0 / ESP32-C3 + SX1278 Ra-02
+ * OffGrid Messenger LoRa v1.2.0-rc.1 / ESP32-C3 + SX1278 Ra-02
  *
  * No esp_wifi_init, no esp_now_init, no Wi-Fi event loop, no Wi-Fi tasks.
  * BLE (NimBLE) and native USB continue to serve the existing OGM4 client.
@@ -22,6 +22,7 @@
 
 #include "ble_bridge.h"
 #include "lora_wire.h"
+#include "lora_schedule.h"
 #include "offgrid_sx1278.h"
 #include "esp_err.h"
 #include "esp_mac.h"
@@ -50,6 +51,7 @@
 #define OG_PENDING 8
 #define OG_RX_HISTORY 32
 #define OG_CTRL_QUEUE 18
+#define OG_DATA_CAD_TIMEOUT_MS 35
 #define OG_SERIAL_BUF 512
 #define OG_PEER_STALE_MS 30000
 #define OG_TX_ATTEMPTS 4
@@ -111,8 +113,9 @@ static uint32_t stat_retry, stat_fail, stat_badtag, stat_crc, stat_hello;
 static uint8_t radio_key[32];
 static bool radio_key_ready;
 static psa_key_id_t radio_psa_id;
-static uint32_t stat_tx_done,stat_appack;
+static uint32_t stat_tx_done,stat_appack,stat_tx_errors,stat_busy_cad;
 static offgrid_sx1278_t *sx;
+static uint32_t busy_cad_streak;
 
 static int64_t millis(void) { return esp_timer_get_time()/1000LL; }
 static void mac_text(const uint8_t m[6], char out[18]) {
@@ -236,11 +239,29 @@ static og_frame_t new_frame(uint8_t type, uint32_t session,uint32_t id) {
     memcpy(f.sender,own_mac,6);f.session=session;f.id=id;
     return f;
 }
+/* Radio ACKs are not allowed to disappear behind an old discovery HELLO.
+ * Dedupe repeated ACKs for the same frame. This queue is owned by radio_loop.
+ */
 static bool control_add(const og_frame_t *f,uint32_t delay_ms) {
+    if(f->type==OG_TYPE_RADIO_ACK){
+        for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(
+            controls[i].frame.magic && controls[i].frame.type==OG_TYPE_RADIO_ACK &&
+            controls[i].frame.session==f->session && controls[i].frame.id==f->id){
+            int64_t target=millis()+delay_ms;
+            if(target<controls[i].due_ms)controls[i].due_ms=target;
+            return true;
+        }
+    }
     for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(!controls[i].frame.magic){
         controls[i].frame=*f;controls[i].due_ms=millis()+delay_ms;return true;
     }
-    output("ERROR|CONTROL_QUEUE_FULL\n");return false;
+    /* Best-effort HELLO traffic must never displace a real radio ACK. */
+    if(f->type==OG_TYPE_RADIO_ACK){
+        for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_HELLO){
+            controls[i].frame=*f;controls[i].due_ms=millis()+delay_ms;return true;
+        }
+    }
+    output("ERROR|CONTROL_QUEUE_FULL|TYPE=%u\n",(unsigned)f->type);return false;
 }
 static esp_err_t tx(const og_frame_t *f) {
     if(!radio_key_ready)return ESP_ERR_INVALID_STATE;
@@ -251,23 +272,28 @@ static esp_err_t tx(const og_frame_t *f) {
     memcpy(bytes+n,digest,OG_AUTH_BYTES);memset(digest,0,sizeof(digest));
     esp_err_t e=offgrid_sx1278_send(sx,bytes,n+OG_AUTH_BYTES,OG_RADIO_TX_TIMEOUT_MS);
     if(e==ESP_OK)stat_tx++;
-    else output("RADIO_DIAG|TX_ERROR|%s\n",esp_err_to_name(e));
+    else stat_tx_errors++;
+    if(e!=ESP_OK)output("RADIO_DIAG|TX_ERROR|%s\n",esp_err_to_name(e));
     return e;
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.1.0|DIAG=1|SACK=0|ACKENGINE=2|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.2.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
+    unsigned pending_count=0,ctrl_count=0;
+    for(size_t i=0;i<OG_PENDING;i++)if(pending[i].used)pending_count++;
+    for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.magic)ctrl_count++;
     output("LINK|%s|RSSI=%d|PHY=0|MODE=LORA|OK=%" PRIu32 "|RETRY=%" PRIu32
-           "|FAIL=%" PRIu32 "|TXOK=%" PRIu32 "|TXFAIL=0|RX=%" PRIu32
+           "|FAIL=%" PRIu32 "|TXOK=%" PRIu32 "|TXFAIL=%" PRIu32 "|RX=%" PRIu32
            "|HELLO=%" PRIu32 "|CHANGES=0|SNR=NA|RADIOACK=%" PRIu32
            "|BADTAG=%" PRIu32 "|CRC=%" PRIu32 "|TXDONE=%" PRIu32
-           "|APPACK=%" PRIu32 "|PROFILE=FIXED_SF7_BW125_CR45\n",
-           p,(int)peer_rssi,stat_delivered,stat_retry,stat_fail,stat_tx,
+           "|APPACK=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PROFILE=FIXED_SF7_BW125_CR45\n",
+           p,(int)peer_rssi,stat_delivered,stat_retry,stat_fail,stat_tx,stat_tx_errors,
            stat_rx,stat_hello,stat_radio_ack,stat_badtag,stat_crc,
-           stat_tx_done,stat_appack);
+           stat_tx_done,stat_appack,stat_busy_cad,
+           pending_count,ctrl_count);
 }
 static og_received_t *history_find(const uint8_t mac[6],uint32_t session,uint32_t id) {
     for(size_t i=0;i<OG_RX_HISTORY;i++)if(received[i].used &&
@@ -411,6 +437,11 @@ static void service_queues(void) {
             const int rank=(f->type==OG_TYPE_RADIO_ACK)?0:
                            (f->type==OG_TYPE_HELLO?2:1);
             if(rank!=priority || (waiting_for_ack && rank!=0))continue;
+            /* Discovery cannot consume airtime while real peer traffic is
+             * flowing. It is disposable, not a delivery guarantee. */
+            if(rank==2 && peer_seen && now-peer_at_ms<2000){
+                controls[i].frame.magic=0;continue;
+            }
             const og_frame_t frame=*f;controls[i].frame.magic=0;
             (void)tx(&frame);return;
         }
@@ -432,6 +463,23 @@ static void service_queues(void) {
         output("RETRY|%" PRIu32 "|%" PRIu32 "|%u\n",
                p->frame.session,p->frame.id,(unsigned)(p->tries+1));
     }
+    /* Detect an already-running LoRa transmission before sending another
+     * DATA frame. CAD is best-effort and stays off for immediate radio ACKs.
+     * Busy-channel deferrals never consume a retry attempt. */
+    bool busy=false;
+    esp_err_t cad=offgrid_sx1278_rx_busy(sx,&busy);
+    /* Only run a short CAD if the continuous receiver has not detected a
+     * preamble/ongoing packet. CAD itself temporarily stops normal RX. */
+    if(cad==ESP_OK && !busy)cad=offgrid_sx1278_cad(sx,&busy,OG_DATA_CAD_TIMEOUT_MS);
+    if(cad==ESP_OK && busy){
+        stat_busy_cad++;busy_cad_streak++;
+        p->due_ms=millis()+og_busy_backoff_ms(esp_random(),busy_cad_streak,own_mac[5]);
+        return;
+    }
+    if(cad!=ESP_OK){
+        output("RADIO_DIAG|CAD_ERROR|%s\n",esp_err_to_name(cad));
+    }
+    busy_cad_streak=0;
     esp_err_t status=tx(&p->frame);
     p->tries++;
     if(status==ESP_OK){
@@ -447,8 +495,8 @@ static void service_queues(void) {
     /* After a failed radio ACK, spread retries across >one LoRa packet's
      * airtime. Two nodes transmitting simultaneously must not repeatedly
      * collide on identical retry schedules. First attempt stays responsive. */
-    const uint32_t contention=p->tries<=1?120u:180u*(uint32_t)p->tries;
-    p->due_ms=millis()+og_ack_wait_ms(p->tries)+(esp_random()%contention);
+    p->due_ms=millis()+og_ack_wait_ms(p->tries)+
+              og_air_retry_jitter_ms(esp_random(),p->tries,own_mac[5]);
     if(status!=ESP_OK && p->tries>=OG_TX_ATTEMPTS){
         output("FAILED|%" PRIu32 "|%" PRIu32 "|RADIO_TX_ERROR\n",
                p->frame.session,p->frame.id);
@@ -484,13 +532,16 @@ static void radio_loop(void *arg) {
             last_hello_ms=now+(esp_random()%450);
             bool busy=false;
             for(size_t i=0;i<OG_PENDING;i++)if(pending[i].used){busy=true;break;}
+            if(peer_seen && now-peer_at_ms<2000)busy=true;
             if(!busy){
                 og_frame_t hello=new_frame(OG_TYPE_HELLO,boot_session,0);
                 (void)control_add(&hello,110+(esp_random()%300));
             }
         }
         if(now-last_link_ms>=OG_STATUS_MS){last_link_ms=now;show_link();}
-        if(now-last_ready_ms>=OG_STATUS_MS){last_ready_ms=now;show_ready("BEACON");}
+        /* The USB READY beacon is for reconnect, not a source of continuous
+         * serial pressure during sustained high-volume transfers. */
+        if(now-last_ready_ms>=8000){last_ready_ms=now;show_ready("BEACON");}
         service_queues();
         /* Never spin continuously even when both USB and LoRa are active. */
         vTaskDelay(1);
@@ -588,7 +639,7 @@ void app_main(void) {
 #else
     puts("USBMODE|LEGACY");
 #endif
-    puts("BOOT|OffGrid Messenger LoRa v1.1.0 (Wi-Fi and ESP-NOW excluded)");
+    puts("BOOT|OffGrid Messenger LoRa v1.2.0-rc.1 (Wi-Fi and ESP-NOW excluded)");
     esp_err_t e=nvs_flash_init();
     if(e==ESP_ERR_NVS_NO_FREE_PAGES || e==ESP_ERR_NVS_NEW_VERSION_FOUND){
         /* This is a standard ESP-IDF NVS recovery path. It erases NVS only
