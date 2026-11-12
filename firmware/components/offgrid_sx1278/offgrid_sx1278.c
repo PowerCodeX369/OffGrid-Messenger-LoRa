@@ -1,9 +1,9 @@
 /*
  * OffGrid Messenger LoRa: SX1278 / Ra-02 ESP-IDF SPI radio driver.
  *
- * Small, deterministic blocking API intended for initial hardware integration.
- * No encryption or app protocol is implemented here; it is NOT a chat driver.
- * A single dedicated radio-worker task must own the handle in future phases.
+ * Small, deterministic blocking SPI API owned by one radio-worker task.
+ * Encryption, authentication, retransmissions and chat protocol are handled
+ * separately in firmware/main/main.c; this module owns only the SX1278.
  *
  * SX1278 LoRa register addresses follow Semtech SX1276/77/78/79 Rev 7.
  */
@@ -86,6 +86,26 @@ static esp_err_t write_reg(offgrid_sx1278_t *r, uint8_t reg, uint8_t value)
     return radio_transfer(r, reg | 0x80U, value, NULL);
 }
 
+
+/* FIFO burst: ONE CS assertion for the entire packet rather than 200+
+ * ESP-IDF spi_device_transmit calls. The SX1278 FIFO address does NOT
+ * increment as a register; its internal FIFO pointer increments per byte.
+ * ESP-IDF DMA enables transfers over its non-DMA 64-byte FIFO limit.
+ * Full-duplex is used; ESP-IDF may stage unaligned buffers internally. */
+static esp_err_t fifo_burst(offgrid_sx1278_t *r, const uint8_t *input,
+                            uint8_t *output, size_t n)
+{
+    if(!r || n==0 || n>OFFGRID_SX1278_MAX_PAYLOAD || (!input && !output))
+        return ESP_ERR_INVALID_ARG;
+    uint8_t txbuf[OFFGRID_SX1278_MAX_PAYLOAD+1]={0};
+    uint8_t rxbuf[OFFGRID_SX1278_MAX_PAYLOAD+1]={0};
+    txbuf[0]=input?0x80U:0x00U;
+    if(input)memcpy(txbuf+1,input,n);
+    spi_transaction_t t={.length=(n+1)*8,.tx_buffer=txbuf,.rx_buffer=rxbuf};
+    esp_err_t e=spi_device_transmit(r->device,&t);
+    if(e==ESP_OK && output)memcpy(output,rxbuf+1,n);
+    return e;
+}
 static esp_err_t radio_reset(offgrid_sx1278_t *r)
 {
     RETURN_ON_ERROR(gpio_set_level(r->pins.reset, 0));
@@ -217,9 +237,9 @@ esp_err_t offgrid_sx1278_open(const offgrid_sx1278_pins_t *pins,
         .mosi_io_num = pins->mosi, .miso_io_num = pins->miso,
         .sclk_io_num = pins->sck,
         .quadwp_io_num = -1, .quadhd_io_num = -1,
-        .max_transfer_sz = 4,
+        .max_transfer_sz = OFFGRID_SX1278_MAX_PAYLOAD+1,
     };
-    err = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_DISABLED);
+    err = spi_bus_initialize(SPI2_HOST, &bus, SPI_DMA_CH_AUTO);
     if (err != ESP_OK) goto fail;
     r->owns_bus = true;
     spi_device_interface_config_t dev = {
@@ -309,9 +329,7 @@ esp_err_t offgrid_sx1278_send(offgrid_sx1278_t *r, const uint8_t *data,
     RETURN_ON_ERROR(offgrid_sx1278_standby(r));
     RETURN_ON_ERROR(clear_irqs(r));
     RETURN_ON_ERROR(write_reg(r, REG_FIFO_ADDR_PTR, 0x00U));
-    for (size_t i = 0; i < size; ++i) {
-        RETURN_ON_ERROR(write_reg(r, REG_FIFO, data[i]));
-    }
+    RETURN_ON_ERROR(fifo_burst(r,data,NULL,size));
     RETURN_ON_ERROR(write_reg(r, REG_PAYLOAD_LEN, (uint8_t)size));
     /* DIO0 mapping 01 = TxDone. */
     RETURN_ON_ERROR(write_reg(r, REG_DIO_MAPPING1, 0x40U));
@@ -378,9 +396,7 @@ esp_err_t offgrid_sx1278_receive(offgrid_sx1278_t *r, uint8_t *buffer,
     uint8_t start = 0;
     RETURN_ON_ERROR(read_reg(r, REG_FIFO_RX_CURRENT, &start));
     RETURN_ON_ERROR(write_reg(r, REG_FIFO_ADDR_PTR, start));
-    for (uint8_t i = 0; i < count; ++i) {
-        RETURN_ON_ERROR(read_reg(r, REG_FIFO, &buffer[i]));
-    }
+    RETURN_ON_ERROR(fifo_burst(r,NULL,buffer,count));
     int8_t snr_q4 = 0;
     uint8_t snr_raw = 0, rssi_raw = 0;
     RETURN_ON_ERROR(read_reg(r, REG_PKT_SNR, &snr_raw));
