@@ -21,9 +21,10 @@ typedef struct {
     offgrid_sx1278_bandwidth_t bandwidth;
     uint8_t spreading_factor;     /* SF7..SF12; SF6 needs a different header mode. */
     uint8_t coding_denominator;    /* 5..8 for rate 4/5..4/8. */
-    int8_t tx_power_dbm;          /* 2..17 for initial, standard PA_BOOST path. */
+    int8_t tx_power_dbm;          /* 2..17 normal PA, or 18 with high_pa_dac enabled. */
     uint8_t sync_word;            /* Must match the peer. */
     uint16_t preamble_symbols;
+    bool high_pa_dac;          /* Explicit module-rated 18 dBm mode; requires stable 3.3 V. */
 } offgrid_sx1278_profile_t;
 
 typedef struct {
@@ -32,6 +33,8 @@ typedef struct {
     uint8_t modem_config2;
     uint8_t modem_config3;
     uint8_t pa_config;
+    uint8_t pa_dac;
+    uint8_t ocp;
 } offgrid_sx1278_register_profile_t;
 
 /* Reject unsupported/unsafe settings. Returns false without side effects. */

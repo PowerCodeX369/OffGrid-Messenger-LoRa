@@ -11,7 +11,9 @@ bool offgrid_sx1278_profile_valid(const offgrid_sx1278_profile_t *p)
             p->bandwidth == OFFGRID_SX1278_BW_500_KHZ) &&
            p->spreading_factor >= 7U && p->spreading_factor <= 12U &&
            p->coding_denominator >= 5U && p->coding_denominator <= 8U &&
-           p->tx_power_dbm >= 2 && p->tx_power_dbm <= 17 &&
+           p->tx_power_dbm >= 2 && (
+               (!p->high_pa_dac && p->tx_power_dbm<=17) ||
+               (p->high_pa_dac && p->tx_power_dbm==18)) &&
            p->preamble_symbols >= 6U;
 }
 
@@ -37,6 +39,16 @@ bool offgrid_sx1278_make_registers(const offgrid_sx1278_profile_t *p,
         ((1UL << p->spreading_factor) * 1000000UL) / (uint32_t)p->bandwidth;
     r->modem_config3 = (uint8_t)(0x04U | (symbol_us > 16000UL ? 0x08U : 0U));
     /* PA_BOOST at ordinary levels: OutputPower = Pout - 2 dBm. */
-    r->pa_config = (uint8_t)(0x80U | (uint8_t)(p->tx_power_dbm - 2));
+    if (p->high_pa_dac) {
+        /* Special SX1278 PA_DAC Pout=5+OutputPower. +18 -> field 13.
+         * Only module-rated nominal 18 dBm; NEVER +22 dBm. */
+        r->pa_config=0x8DU;
+        r->pa_dac=0x87U;
+        r->ocp=0x32U;
+    } else {
+        r->pa_config=(uint8_t)(0x80U|(uint8_t)(p->tx_power_dbm-2));
+        r->pa_dac=0x84U;
+        r->ocp=0x2BU;
+    }
     return true;
 }

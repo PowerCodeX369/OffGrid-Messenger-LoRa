@@ -177,11 +177,10 @@ esp_err_t offgrid_sx1278_set_profile(offgrid_sx1278_t *r,
     RETURN_ON_ERROR(write_reg(r, REG_FRF_MID, (reg.frf >> 8) & 0xFFU));
     RETURN_ON_ERROR(write_reg(r, REG_FRF_LSB, reg.frf & 0xFFU));
 
-    /* Conservative normal PA_BOOST path. High-power PA_DAC mode NOT enabled. */
-    RETURN_ON_ERROR(write_reg(r, REG_PA_DAC, 0x84U));
+    /* Normal PA_BOOST except for explicit nominal +18 dBm mode. */
+    RETURN_ON_ERROR(write_reg(r, REG_PA_DAC, reg.pa_dac));
     RETURN_ON_ERROR(write_reg(r, REG_PA_CONFIG, reg.pa_config));
-    /* Preserve ordinary over-current protection settings for <=17 dBm. */
-    RETURN_ON_ERROR(write_reg(r, REG_OCP, 0x2BU));
+    RETURN_ON_ERROR(write_reg(r, REG_OCP, reg.ocp));
 
     RETURN_ON_ERROR(write_reg(r, REG_MODEM_CONFIG1, reg.modem_config1));
     RETURN_ON_ERROR(write_reg(r, REG_MODEM_CONFIG2, reg.modem_config2));
@@ -189,9 +188,9 @@ esp_err_t offgrid_sx1278_set_profile(offgrid_sx1278_t *r,
     RETURN_ON_ERROR(write_reg(r, REG_PREAMBLE_MSB, p->preamble_symbols >> 8));
     RETURN_ON_ERROR(write_reg(r, REG_PREAMBLE_LSB, p->preamble_symbols & 0xFFU));
     RETURN_ON_ERROR(write_reg(r, REG_SYNC_WORD, p->sync_word));
-    /* LoRa v1.0 carries at most 218 bytes (202-byte OGM2 frame + HMAC).
-     * Start each half-duplex FIFO direction at zero so even maximum packets
-     * fit without depending on address-pointer wrapping at 0xFF. */
+    /* v1.6 ARQ frames use up to 254 bytes including header and radio HMAC;
+     * a full SX1278 FIFO transfer is allowed by the SPI DMA burst driver.
+     * Start each half-duplex FIFO direction at zero. */
     RETURN_ON_ERROR(write_reg(r, REG_FIFO_TX_BASE, 0x00U));
     RETURN_ON_ERROR(write_reg(r, REG_FIFO_RX_BASE, 0x00U));
     RETURN_ON_ERROR(write_reg(r, REG_DETECT_OPTIMIZE, 0x03U));
@@ -399,7 +398,7 @@ esp_err_t offgrid_sx1278_receive(offgrid_sx1278_t *r, uint8_t *buffer,
     }
     uint8_t count = 0;
     RETURN_ON_ERROR(read_reg(r, REG_RX_BYTES, &count));
-    if (count == 0 || count > OFFGRID_SX1278_MAX_PAYLOAD || count > capacity) {
+    if (count == 0 || count > capacity) {
         r->stats.rx_oversize++;
         (void)clear_irqs(r);
         return ESP_ERR_INVALID_SIZE;

@@ -18,7 +18,7 @@ extern "C" {
  * One task owns the radio. Callers must not access a handle concurrently.
  * The driver initializes and owns ESP32-C3 SPI2; do not initialize SPI2 twice.
  */
-#define OFFGRID_SX1278_MAX_PAYLOAD 220U /* 202-byte OGM2 frame plus 16-byte HMAC */
+#define OFFGRID_SX1278_MAX_PAYLOAD 255U /* SX1278 FIFO max; ARQ v1 frames <=254 bytes. */
 
 typedef struct offgrid_sx1278 offgrid_sx1278_t;
 

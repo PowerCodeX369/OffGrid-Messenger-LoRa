@@ -11,10 +11,12 @@
 #define OG_MODE_LOW 1u
 #define OG_MODE_BALANCED 2u
 #define OG_MODE_MAX 3u
+#define OG_MODE_EXPERIMENTAL 4u
 static inline const char *og_mode_name(uint8_t mode) {
     switch(mode) {case OG_MODE_LOW:return "LOW";
                   case OG_MODE_BALANCED:return "BALANCED";
                   case OG_MODE_MAX:return "MAX";
+                  case OG_MODE_EXPERIMENTAL:return "EXPERIMENTAL";
                   default:return "INVALID";}
 }
 static inline uint8_t og_mode_parse(const char *name) {
@@ -22,6 +24,7 @@ static inline uint8_t og_mode_parse(const char *name) {
     if(!strcmp(name,"LOW"))return OG_MODE_LOW;
     if(!strcmp(name,"BALANCED"))return OG_MODE_BALANCED;
     if(!strcmp(name,"MAX"))return OG_MODE_MAX;
+    if(!strcmp(name,"EXPERIMENTAL"))return OG_MODE_EXPERIMENTAL;
     return 0;
 }
 /* Time starts after TxDone. ACK air time increases with SF and decreases
@@ -40,11 +43,16 @@ static inline offgrid_sx1278_profile_t og_mode_profile(uint8_t mode) {
     };
     if(mode==OG_MODE_LOW){
         p.bandwidth=OFFGRID_SX1278_BW_500_KHZ;
-        p.tx_power_dbm=2;
+        p.tx_power_dbm=18;
+        p.high_pa_dac=true;
+    }else if(mode==OG_MODE_EXPERIMENTAL){
+        /* Explicit invalid setting, NEVER silently fall back to Balanced. */
+        p.tx_power_dbm=22;p.high_pa_dac=true;
     }else if(mode==OG_MODE_MAX){
         p.bandwidth=OFFGRID_SX1278_BW_125_KHZ;
         p.spreading_factor=9;
-        p.tx_power_dbm=17; /* max standard PA_BOOST; NOT high-power PA_DAC */
+        p.tx_power_dbm=18; /* Ra-02 module-rated nominal; opt-in PA_DAC. */
+        p.high_pa_dac=true;
     }
     return p;
 }
