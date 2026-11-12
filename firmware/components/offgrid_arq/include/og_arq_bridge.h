@@ -10,6 +10,8 @@
 #include <stddef.h>
 #include <stdint.h>
 #define OG_BRIDGE_STAGE_CHUNK 160u
+#define OG_BRIDGE_USB_BATCH 4u
+#define OG_BRIDGE_INTERFRAME_GUARD_MS 25u
 #define OG_BRIDGE_ACTIVE_TIMEOUT_MS 30000u
 
 typedef bool (*og_bridge_radio_fn)(void *, const uint8_t *, size_t);
@@ -43,6 +45,8 @@ typedef struct {
     bool last_valid, duplicate_ack_pending;
     uint32_t duplicate_ack_due;
     uint32_t tx_frames, retransmits, bitmap_acks_tx, bitmap_acks_rx;
+    uint32_t transfer_started_ms, first_frame_ms;
+    uint32_t transfer_frames_base, transfer_retries_base, transfer_timeouts_base;
     uint32_t ack_timeouts, rx_duplicates, reject_auth, usb_errors;
 } og_arq_bridge_t;
 

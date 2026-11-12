@@ -54,8 +54,14 @@ bool og_arq_bridge_chunk(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
         if(s)og_sr_usb_cancel(&s->usb);
         return false;
     }
-    char id[17],line[52];transfer_id(session,transfer,id);
-    snprintf(line,sizeof(line),"BULKSTEP|%s|%u",id,(unsigned)seq);emit(io,line);
+    /* A browser writes up to four USB lines in one bounded burst. Emit a
+     * stage checkpoint only after the final member of that burst or after
+     * the final ciphertext byte; errors always emit BULKFAILED immediately.
+     * This avoids seven USB request/response round trips for a 1-KB probe. */
+    if(((seq+1u)%OG_BRIDGE_USB_BATCH)==0u || s->usb.received==s->usb.expected){
+        char id[17],line[52];transfer_id(session,transfer,id);
+        snprintf(line,sizeof(line),"BULKSTEP|%s|%u",id,(unsigned)seq);emit(io,line);
+    }
     return true;
 }
 bool og_arq_bridge_end(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
@@ -70,6 +76,11 @@ bool og_arq_bridge_end(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
     }
     s->tx_used=true;s->tx_sent_announced=false;s->last_progress=0;
     s->tx_local_errors=0;s->next_tx_at=0;
+    s->transfer_started_ms=io && io->now_ms?io->now_ms(io->context):0;
+    s->first_frame_ms=0;
+    s->transfer_frames_base=s->tx_frames;
+    s->transfer_retries_base=s->retransmits;
+    s->transfer_timeouts_base=s->ack_timeouts;
     char id[17],line[50];transfer_id(session,transfer,id);
     snprintf(line,sizeof(line),"BULKQUEUED|%s",id);emit(io,line);
     return true;
@@ -185,7 +196,14 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
        !s->rx_forwarding && !s->rx.ack_pending){
         s->rx_forwarding=true;s->rx_forward_offset=0;s->rx_seq=0;
     }
-    if(s->rx_forwarding){emit_rx(s,peer_mac,io);return true;}
+    if(s->rx_forwarding){
+        /* USB forwarding no longer needs one radio receive poll per 160 B.
+         * Bound output to four lines/turn (< 1600 serial bytes). The radio
+         * worker remains the sole SX1278 owner and processes each RF IRQ. */
+        for(unsigned i=0;i<OG_BRIDGE_USB_BATCH && s->rx_forwarding;i++)
+            emit_rx(s,peer_mac,io);
+        return true;
+    }
     if(!s->tx_used || !allow_data_tx)return false;
     if(s->tx.phase==OG_SR_WAIT_ACK){
         uint32_t old=s->tx.deadline_ms;og_sr_tx_tick(&s->tx,now);
@@ -198,6 +216,15 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
         s->tx_used=false;return true;
     }
     if(s->tx.phase==OG_SR_COMPLETE){
+        const uint32_t completed_at=io->now_ms?io->now_ms(io->context):now;
+        char stats[180];
+        snprintf(stats,sizeof(stats),
+          "BULKSTAT|%s|RF_MS=%" PRIu32 "|FRAMES=%" PRIu32 "|RETX=%" PRIu32 "|TIMEOUT=%" PRIu32,
+          id,(uint32_t)(completed_at-s->transfer_started_ms),
+          s->tx_frames-s->transfer_frames_base,
+          s->retransmits-s->transfer_retries_base,
+          s->ack_timeouts-s->transfer_timeouts_base);
+        emit(io,stats);
         snprintf(line,sizeof(line),"BULKCONFIRMED|%s",id);emit(io,line);
         s->tx_used=false;return true;
     }
@@ -221,11 +248,17 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
      * premature bitmap timeouts at SF9 and unnecessary retransmissions. */
     const uint32_t done_ms=io->now_ms?io->now_ms(io->context):now;
     s->tx_last_at=done_ms;
+    if(s->tx_frames==s->transfer_frames_base+1u)s->first_frame_ms=done_ms;
     og_sr_tx_done(&s->tx,&frame,true,done_ms,ack_timeout_ms);
     if(!s->tx_sent_announced && s->tx.transmitted==bitmask(s->tx.fragments)){
         snprintf(line,sizeof(line),"BULKSENT|%s",id);emit(io,line);
         s->tx_sent_announced=true;
     }
-    s->next_tx_at=s->tx_last_at+3;
+    /* SF7/BW500 preamble spans only ~2 ms. The receiver needs time to
+     * drain FIFO, verify HMAC, clear the IRQ, and rearm continuous RX.
+     * The previous 3-ms gap could start the next preamble before it was
+     * listening, causing a missing fragment and a costly bitmap timeout.
+     * 25 ms is a cautious scheduling guard, NOT an airtime optimization. */
+    s->next_tx_at=s->tx_last_at+OG_BRIDGE_INTERFRAME_GUARD_MS;
     return true;
 }

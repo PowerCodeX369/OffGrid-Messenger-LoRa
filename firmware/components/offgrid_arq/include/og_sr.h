@@ -22,7 +22,7 @@ extern "C" {
 #define OG_SR_ACK_BYTES 4u
 #define OG_SR_MAX_FRAGMENTS 32u
 #define OG_SR_MAX_TRANSFER (OG_SR_MAX_FRAGMENTS * OG_SR_PAYLOAD)
-#define OG_SR_MAX_WINDOW 4u
+#define OG_SR_MAX_WINDOW 6u
 #define OG_SR_MAX_ATTEMPTS 5u
 #define OG_SR_FLAG_END_BURST 1u
 

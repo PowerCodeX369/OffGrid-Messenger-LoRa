@@ -1,5 +1,5 @@
 /*
- * OffGrid Messenger LoRa v1.6.0-rc.1 / ESP32-C3 + SX1278 Ra-02
+ * OffGrid Messenger LoRa v1.6.1-rc.1 / ESP32-C3 + SX1278 Ra-02
  *
  * No esp_wifi_init, no esp_now_init, no Wi-Fi event loop, no Wi-Fi tasks.
  * BLE (NimBLE) and native USB continue to serve the existing OGM4 client.
@@ -485,7 +485,7 @@ static void profile_service(void) {
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.6.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|ARQ=1|BULK=1|FRAG=224|WINDOW=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.6.1-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -675,7 +675,13 @@ static void process_command(const og_command_t *c) {
     }
     if(c->type==CMD_BULK_END){
         if(og_arq_bridge_end(&arq,c->bulk_session,c->bulk_transfer,
-                             c->bulk_crc,&arq_io))arq_last_tx_ms=millis();
+                             c->bulk_crc,&arq_io)){
+            /* A 1-KB ciphertext now fits one 6-frame SF7 bitmap window,
+             * replacing the needless 4+1 split/extra ACK in rc.1.
+             * Range mode uses a smaller window for long-airtime packets. */
+            arq.tx.window=profile_state.current==OG_MODE_MAX?3u:6u;
+            arq_last_tx_ms=millis();
+        }
         return;
     }
     if(c->type==CMD_KEY){derive_radio_key(c->key);output("KEYRADIO|%s\n",radio_key_ready?"READY":"ERROR");return;}
@@ -823,7 +829,7 @@ static void radio_loop(void *arg) {
             if(n && bytes[0]==OG_SR_VERSION){
                 const uint32_t was=arq.reject_auth;
                 uint32_t silence=profile_state.current==OG_MODE_MAX?1950u:
-                                 profile_state.current==OG_MODE_BALANCED?620u:340u;
+                                 profile_state.current==OG_MODE_BALANCED?480u:200u;
                 (void)og_arq_bridge_receive(&arq,bytes,n,(uint32_t)millis(),silence,&arq_io);
                 if(arq.reject_auth==was){
                     peer_at_ms=millis();peer_arq_at_ms=millis();
@@ -865,7 +871,7 @@ static void radio_loop(void *arg) {
          * transfer; all RF work remains serialized in this owner task. */
         char peer[18];mac_text(peer_mac,peer);
         const uint32_t silence=profile_state.current==OG_MODE_MAX?1950u:
-                               profile_state.current==OG_MODE_BALANCED?620u:340u;
+                               profile_state.current==OG_MODE_BALANCED?480u:200u;
         const uint32_t ack_timeout=profile_state.current==OG_MODE_MAX?2250u:
                                    profile_state.current==OG_MODE_BALANCED?750u:420u;
         bool legacy_busy=false;
@@ -1043,7 +1049,7 @@ void app_main(void) {
 #else
     puts("USBMODE|LEGACY");
 #endif
-    puts("BOOT|OffGrid Messenger LoRa v1.6.0-rc.1 (Wi-Fi and ESP-NOW excluded)");
+    puts("BOOT|OffGrid Messenger LoRa v1.6.1-rc.1 (Wi-Fi and ESP-NOW excluded)");
     esp_err_t e=nvs_flash_init();
     if(e==ESP_ERR_NVS_NO_FREE_PAGES || e==ESP_ERR_NVS_NEW_VERSION_FOUND){
         /* This is a standard ESP-IDF NVS recovery path. It erases NVS only
