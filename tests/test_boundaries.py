@@ -23,6 +23,12 @@ assert 'ESP-NOW</span>' not in ui and 'ESP-NOW channel 6' not in web
 assert "writeLine('RATE '" not in web
 assert "$('attachments').disabled=true" in web and "$('voiceButton').disabled=true" in web
 assert 'urgentReceipts' in web and 'runUrgentReceipts' in web
+assert 'FragmentScheduler' in web and 'rfScheduler.submit' in web
+assert 'FLOW=2' in main and 'FLOW=2' in web
+assert 'OG_DATA_CAD_TIMEOUT_MS' in main and 'og_busy_backoff_ms' in main
+assert "P.types.probe,P.types.probeAck" in web
+assert 'P.types.receiptBatch' in web and 'flushReceiptBatch' in web
+assert 'LoRa speed test' in web
 assert 'BINCAP|0|0' in ble and 'CAPS|FAMILY=LORA' in ble
 assert 'OG_TX_ATTEMPTS' in main and 'RADIOACK|' in main
 assert 'CTRLHEX ' in main and 'CMD_URGENT' in main
@@ -33,7 +39,7 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.1.0" in main and "1.1.0-lora" in web
+assert "1.2.0-rc.1" in main and "1.2.0-lora" in web
 # Source copied to Android is truly unchanged against the imported ESP-NOW
 # repository. The pinned reference hash list is checked during packaging.
 assert (root/'docs/ANDROID_FROZEN_SHA256.txt').exists()

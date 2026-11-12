@@ -70,6 +70,10 @@ int main(void){
     assert(offgrid_sx1278_send(radio,written,sizeof(written),1600)==ESP_OK);
     assert(bulk_writes==1 && tx_writes==sizeof(written));
     assert(!memcmp(fifo,written,sizeof(written)));
+    bool busy=false;
+    regs[0x18]=0x04; /* Valid LoRa RX in progress. Query must not switch modes. */
+    assert(offgrid_sx1278_rx_busy(radio,&busy)==ESP_OK && busy);
+    regs[0x18]=0;assert(offgrid_sx1278_rx_busy(radio,&busy)==ESP_OK && !busy);
     uint8_t readback[218]={0};size_t n=0;
     offgrid_sx1278_packet_info_t info={0};
     regs[0x13]=sizeof(written);regs[0x10]=0;regs[0x19]=0x10;regs[0x1a]=80;

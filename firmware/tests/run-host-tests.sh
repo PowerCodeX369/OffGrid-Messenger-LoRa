@@ -17,11 +17,21 @@ cc -std=c11 -Wall -Wextra -Werror -Wno-unused-variable \
     firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c -o "$fifo_bin"
 "$fifo_bin"
 rm -f "$fifo_bin"
+schedule_bin=/tmp/offgrid-lora-schedule-$$
+cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
+    firmware/tests/test_lora_schedule.c -o "$schedule_bin"
+"$schedule_bin"
+rm -f "$schedule_bin"
+node --check web/lora_scheduler.js
+node --check web/lora_benchmark.js
+node --check web/lora_receipts.js
 node --check web/app.js
 node --check web/protocol.js
 node firmware/tests/test-protocol.cjs
 node firmware/tests/test-adaptive.cjs
 node firmware/tests/test-diagnostic-protocol.cjs
 node firmware/tests/test-lora-delivery.cjs
+node firmware/tests/test-lora-scheduler.cjs
+node firmware/tests/test-lora-receipts.cjs
 python3 tests/test_boundaries.py
 if command -v clang >/dev/null 2>&1; then firmware/tests/run-syntax-checks.sh; fi
