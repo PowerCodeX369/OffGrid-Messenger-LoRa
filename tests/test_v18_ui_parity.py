@@ -78,7 +78,7 @@ with sync_playwright() as playwright:
             assert not page.locator('#photoViewer').is_visible()
             # Typing swaps the mic for the send icon, exactly like ESP-NOW.
             page.locator('#messageInput').fill('hi')
-            page.wait_for_timeout(350)
+            page.wait_for_function("getComputedStyle(document.querySelector('#voiceButton')).opacity < 0.1 && getComputedStyle(document.querySelector('#sendButton')).opacity > 0.9", timeout=4000)
             styles_with_text=page.evaluate('''()=>({
                 mic:getComputedStyle(document.querySelector('#voiceButton')).opacity,
                 send:getComputedStyle(document.querySelector('#sendButton')).opacity,
