@@ -1,3 +1,9 @@
+# Firmware v1.8.0-rc.1 — LoRa media-capable bridge
+
+The v1.7 SX1278 SPI2 driver, radio frame authentication, 224-byte ARQ fragments, six-packet selective-repeat bitmap window, authenticated profile negotiation, 3 manual power/speed modes, and two-way RSSI/SNR AUTO policy are unchanged. No images or audio are decoded/stored in MCU RAM: the browser compresses and AES-GCM encrypts **5,800-byte media segments**, and firmware just forwards each via the existing `BULK` USB/RF mechanism. The local physical-USB `MEDIA ON` hint may trigger the existing authenticated FAST profile handshake **only if AUTO was enabled** and both sides have safe signal margins; `MEDIA OFF` cancels the hint. A hint automatically expires after 10 minutes. Cannot recover an already-silent RF link without a confirmed handshake.
+
+Build with ESP-IDF 6.1 using `idf.py set-target esp32c3 && idf.py build`; flash **both ESP32s**, preserve NVS pairing. Confirm `FW=1.8.0-rc.1`, `ARQ=1`, `AUTORF=1`, `MEDIA=1`. No Wi-Fi/ESP-NOW, photo codec or voice recorder runs on ESP32. BLE remains present but native LoRa Android media is not implemented. See `../docs/V1_8_0_ENCRYPTED_MEDIA.md` and the root README for wiring and acceptance.
+
 ## v1.7 automatic RF mode
 
 This release retains the v1.6.1-rc.2 USB/AES/ARQ transport unchanged. New local USB commands: `AUTO ON`, `AUTO OFF`, and existing `PROFILE LOW/BALANCED/MAX` for manual override. `AUTO ON` requires `POWER18 VERIFIED` on the initiating USB after explicit operator confirmation of **both** radio boards. Authenticated `OG_TYPE_AUTO_CTRL` and `OG_TYPE_AUTO_ACK` synchronize Auto ON/OFF; periodic HMAC-protected `OG_TYPE_AUTO_METRIC` reports supply the peer's measured RSSI/SNR. Only one MAC-elected coordinator changes profiles using the original OFFER/AGREE/verification/rollback. Radio hardware access remains in the single SX1278 task. No Wi-Fi or ESP-NOW runtime.

@@ -1,3 +1,9 @@
+# Web messenger v1.8.0-rc.1 — compressed and encrypted media
+
+Serve the complete `web/` directory over localhost/HTTPS and use **v1.8 firmware on both boards**. Photo `+` and microphone are enabled only after encryption pairing. Photos are recompressed as WebP/JPEG with an absolute 48 KiB budget (photo quality varies), voice records Opus at a suggested 16 kbps, with an absolute **20 KiB** budget (typically 7–12 seconds, NOT two minutes). Every 5,800-byte media part is separately AES-256-GCM encrypted, passed to the existing 7,168-byte radio bulk transport, and reassembled only after whole-media SHA verification. Delivered/read ticks require the usual encrypted application receipts.
+
+Auto RF is **opt-in**: it can request Fast when both received signals are strong and downgrade via the existing authenticated handshake if link quality declines. Manual Fast/Balanced/Range are never overridden by sending media. Transfers pause at part boundaries; tap a failed bubble to retry from the beginning. The receiver retains partial pieces only while its browser session stays live. Not physically tested here. Read `../docs/V1_8_0_ENCRYPTED_MEDIA.md`.
+
 ## v1.7 automatic Fast-first modes
 
 Open **Settings → Automatic / manual LoRa modes** and choose Enable Auto on ONE browser after confirming both radio boards can handle nominal +18 dBm TX. The peer follows an authenticated radio control message. Auto prefers Fast, steps through Balanced and Range with RSSI/SNR hysteresis, and promotes back after sustained improvement. Manual profile buttons still work and **override** Auto. Reboot both boards to restore safe manual Balanced if they cannot communicate. Only the user-approved initiating browser starts Auto; it is deliberately not persisted across power cycles. See `../docs/V1_7_0_ADAPTIVE_RF.md`.

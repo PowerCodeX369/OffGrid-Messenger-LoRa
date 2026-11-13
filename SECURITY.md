@@ -1,3 +1,7 @@
+# v1.8 security note — media transport
+
+Image and voice contents are **not plaintext on USB or RF**: files are compressed locally, then segmented into 5,800-byte chunks with a whole-file truncated SHA-256 digest; every segment is independently AES-256-GCM encrypted with a fresh nonce/transfer ID, and the existing LoRa frame HMAC is retained. Partial files never cause delivery/read receipts; only complete verified media is displayed and stored encrypted locally. Untrusted image/audio decoders remain within the browser sandbox. Receiver keeps at most four partial media files in RAM and expires them after 20 minutes (this is not persistent resume). `MEDIA ON` is permitted only via physical local USB and cannot bypass the user-enabled AUTO setting or authenticated profile handshake.
+
 # OffGrid Messenger LoRa — security model
 
 - **Application secrecy:** OGM4 AES-256-GCM in the browser before USB transmission; delivered/read receipts are encrypted and authenticated as application messages. Never infer delivery from a radio-frame ACK alone.

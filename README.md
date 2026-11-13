@@ -1,5 +1,29 @@
 # OffGrid Messenger LoRa
 
+**v1.8.0-rc.1 — encrypted photos and short Opus voice notes on the working v1.7 Auto-RF platform.**
+
+This is a **source release candidate**. All browser C/JS/Node media tests and Chromium compression/short-Opus tests passed; **ESP-IDF 6.1 compilation and real two-board media transfers were not possible in the container**. The confirmed-working v1.7 ZIP remains the rollback.
+
+## New in v1.8
+
+| Feature | Enforced limit | Implementation |
+|---|---|---|
+| Photos | **48 KiB** (≤49,152 bytes) | WebP preferred/JPEG fallback, quality-adaptive 1600–640 px long edge, EXIF stripped via Canvas; error rather than unreadable extreme downscale |
+| Voice notes | **20 KiB** (≤20,480 bytes) | Browser Opus ~16 kbps, early stop at accumulated 15 KiB, typically **7–12 seconds** of speech; actual encoded file strictly capped |
+| Large media transport | 5,800 bytes/segment; 7,168 bytes/encrypted bulk transfer | Fresh AES-256-GCM per piece, authenticated radio HMAC and six-fragment selective ARQ, whole-media SHA-256 digest, retry only unconfirmed piece |
+| Media-aware RF | Opt-in AUTO only | Fast priority with strong **two-way** link evidence; signed downgrade when weak, manual profile override preserved; cannot switch safely during a completely silent link |
+
+**Important audio limitation:** 120 seconds within 20 KiB = only 1.37 kbps including metadata, below Opus's minimum standard 6 kbps and far below its recommended wideband speech rates. v1.8 keeps a usable speech-quality target **and** the hard 20 KiB cap by limiting recording duration. It does **not** claim natural-sounding 2-minute/20 KiB voice notes. For long notes, a future release must allow larger audio or multiple chunks.
+
+**First tests:** flash both boards with v1.8 and open **both v1.8 browsers**. Start in manual Balanced, send text both ways, then try the `+` photo button and the microphone. To allow a media transfer to opportunistically use Fast then adapt down, enable Auto after checking the normal high-power safety prompts. Everything remains offline with no Wi-Fi or ESP-NOW firmware use. The Android source stays frozen.
+
+Read **[v1.8 media architecture and hardware acceptance](docs/V1_8_0_ENCRYPTED_MEDIA.md)** for packet format, recovery, field tests and limitations.
+
+---
+
+## Previous baseline details — v1.7
+
+
 **v1.7.0-rc.1 — optional automatic three-mode LoRa link adaptation with Fast priority, authenticated peer synchronization, and manual override**
 
 Independent SX1278/Ra-02 + ESP32-C3 Super Mini firmware, browser messenger, source/test history, and preserved original Android application. Maintained under PowerCodeX. This is **LoRa-only** firmware: no Wi-Fi or ESP-NOW initialization; the original ESP-NOW repository is separate and unchanged.

@@ -1,5 +1,15 @@
 # Changelog
 
+## [v1.8.0-rc.1] — 2026-11-13
+
+- Add encrypted photo sending with size-targeted WebP/JPEG recompression and natural-detail-preserving resolution floor (48 KiB maximum). Existing gallery/zoom/download retained.
+- Add short compressed Opus voice notes with playback/played receipt; hard 20 KiB encoded-file cap, browser-enforced early recording stop. Do **not** claim 2-minute clear Opus speech at 20 KiB.
+- Add `OGM4 mediaPart` per-file browser-layer segmentation (5,800-byte parts), independent fresh AES-GCM envelopes and 16-byte truncated SHA-256 whole-file integrity. Bounded reassembly, duplicate protection, partial retry and application-level delivery only after the complete authenticated message.
+- Add local `MEDIA ON/OFF` AUTO-radio hints. The sender can request authenticated Fast only with two-way strong signal margins, and original Auto-RF fallback remains active between ARQ pieces. Manual settings untouched; no unsafe automatic high-power change.
+- Preserve v1.7 ARQ worker and SX1278 driver byte-for-byte. Photos, short voice, download and pause/retry are browser-managed; no ESP32 image/audio decoding.
+- Add Node loss/duplicate/auth media tests and Chromium compression/Opus smoke. Actual ESP-IDF 6.1 build and physical media/RF tests **not performed**, so RC only. See `docs/V1_8_0_ENCRYPTED_MEDIA.md`.
+
+
 ## [1.7.0-rc.1] — 2026-11-13
 
 - Add **operator-enabled Fast-priority automatic link adaptation**. Coordinator chosen deterministically by device MAC; authenticated per-node RSSI/SNR and recent ARQ retry/CRC reports establish link conditions in both directions. Fixed metres are not used.

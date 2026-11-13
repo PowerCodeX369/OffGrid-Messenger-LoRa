@@ -1,16 +1,12 @@
-# Web-first LoRa roadmap
+# OffGrid LoRa roadmap (updated for v1.8)
 
-The original ESP-NOW repo remains untouched. The Android app in this repo stays frozen throughout v1.x.
+- **v1.6.1-rc.2 — user-confirmed stable baseline:** reliable text, 224-byte ARQ data chunks, batched authenticated ACKs, one-click synchronized Fast/Balanced/Range manual modes.
+- **v1.7.0-rc.1 — user-confirmed locally functional:** opt-in two-way RSSI/SNR automatic Fast-first transitions, with safe fallback/rollback and manual override. Longer range not yet field-tested.
+- **v1.8.0-rc.1 — this release candidate:** compressed and fully encrypted photos at ≤48 KiB, short Opus voice notes ≤20 KiB, media segmentation/retry, and media-aware AUTO RF hints. A two-minute clear voice note cannot fit the 20 KiB cap with Opus.
+- **v1.8 hardware qualification (next):** real radio media testing, 1-minute sustained transfers, frame loss/duplicate injection, photo rendering, Opus microphone/playback, power profiling, long-range RF quality thresholds and complete ESP-IDF build.
+- **v1.9 (planned):** durable, reconnect-safe media checkpoints in encrypted IndexedDB, receiving progress and cancellation across reboot, measured bitrate/latency, optional higher-budget long voice notes if the user accepts the physics of clear audio.
+- **v1.10 (planned):** battery/low-power modes, sleep/wake power draw measurements, regulatory duty-cycle handling and safe +18 dBm supply validation.
+- **v1.11 (planned):** replay resistance across reboot, independent security audit, fuzzing and soak tests.
+- **v2.0 (final Android integration):** update the frozen Android BLE app to detect LoRa/ESP-NOW family, support authenticated radio/media transfers and preserve the original ESP-NOW behavior.
 
-- **v1.0.0**: independent Wi-Fi-free LoRa firmware; one conservative fixed profile, NimBLE, USB, authenticated two-way encrypted text, basic receipts, web client.
-- **v1.1.0**: split real radio TxDone, radio ACK, and authenticated delivery/read receipts; improve the SX1278 FIFO transfer path.
-- **v1.2.0**: bounded sequential half-duplex text scheduling, priority encrypted receipt batching, channel contention handling, and a genuine encrypted LoRa speed test. **Selective-repeat/sliding-window/bitmap ACK is deferred** until the one-at-a-time scheduler has passed real two-board burst testing, and will have its own versioned milestone; no claim of selective repeat is made for v1.2.
-- **v1.3.0**: Fast / Balanced / Ultra-range SX1278 profiles, initially manual then evidence-based adaptation.
-- **v1.4.0**: adaptive progressive photos, compression driven by measured link capacity.
-- **v1.5.0**: speech-optimized voice encoding, delivery and playback.
-- **v1.6.0**: LoRa RX/TX/sleep scheduling and measured battery optimization.
-- **v1.7.0**: web app polish and packet-level diagnostics.
-- **v1.8.0**: cryptographic/replay audit, interference tests, endurance, field validation.
-- **v2.0.0**: last phase—update existing Android app to auto-detect ESP-NOW original firmware versus LoRa firmware over authenticated BLE and render family-specific profiles/compression without degrading legacy support.
-
-Each milestone must pass its own source checks, an ESP-IDF compile, and physical validation before being called hardware-stable.
+Every milestone must pass host tests and a clean ESP-IDF build, followed by physical two-node acceptance, before being called a hardware-stable release. No real-world distance is inferred from RSSI alone.
