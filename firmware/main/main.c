@@ -25,6 +25,7 @@
 #include "lora_schedule.h"
 #include "lora_modes.h"
 #include "lora_profile_control.h"
+#include "lora_auto.h"
 #include "og_arq_bridge.h"
 #include "offgrid_sx1278.h"
 #include "esp_err.h"
@@ -79,7 +80,7 @@ static const uint8_t KDF_CONTEXT[] = "OffGrid-LoRa-HMAC-v1";
 
 typedef enum { CMD_DATA=1, CMD_URGENT, CMD_APPACK, CMD_READ, CMD_STATUS,
                CMD_KEY, CMD_PROFILE, CMD_BULK_BEGIN, CMD_BULK_CHUNK,
-               CMD_BULK_END, CMD_HIGH_PA_ON, CMD_HIGH_PA_OFF } og_cmd_type_t;
+               CMD_BULK_END, CMD_HIGH_PA_ON, CMD_HIGH_PA_OFF, CMD_AUTO_ON, CMD_AUTO_OFF } og_cmd_type_t;
 typedef struct {
     og_cmd_type_t type;
     uint8_t mac[6];
@@ -157,6 +158,24 @@ static uint8_t last_profile_offer_mac[6];
 /* After confirming a new profile, continue short authenticated HELLOs so the
  * other node can also confirm its profile and avoid asymmetrical rollback. */
 static int64_t profile_assist_until_ms, profile_assist_next_ms;
+/* RF automation is opt-in and limited to the established single radio task.
+ * A deterministic single leader (lower MAC) selects modes, based on recent
+ * authenticated local + peer RSSI/SNR reports. The existing synchronized
+ * OFFER/AGREE/verify/rollback protocol still performs the actual switch. */
+static bool auto_enabled, auto_requested_profile;
+static og_auto_policy_t auto_policy;
+static bool auto_ctrl_pending, auto_ctrl_target;
+static uint32_t auto_ctrl_nonce, auto_ctrl_session;
+static uint8_t auto_ctrl_retries;
+static int64_t auto_ctrl_retry_at, auto_last_metric_ms, auto_defer_until_ms;
+static uint32_t auto_last_accepted_id, auto_last_accepted_session;
+static bool auto_seen_control;
+static uint32_t auto_last_metric_session, auto_last_metric_id;
+static bool auto_peer_enabled;
+static uint32_t auto_attempts, auto_failures;
+static uint32_t auto_last_metric_loss_count;
+static uint8_t auto_peer_recent_losses;
+
 
 
 
@@ -176,7 +195,10 @@ static bool profile_has_pending(void) {
     return false;
 }
 static og_frame_t profile_frame(uint8_t type, uint8_t target, uint32_t session, uint32_t nonce) {
-    return og_profile_control_frame(type,target,own_mac,session,nonce);
+    og_frame_t f=og_profile_control_frame(type,target,own_mac,session,nonce);
+    if(auto_requested_profile && (type==OG_TYPE_PROFILE_OFFER || type==OG_TYPE_PROFILE_AGREE))
+        f.data[5]|=OG_PROFILE_AUTO_FLAG;
+    return f;
 }
 static bool profile_nonce_valid(const og_frame_t *f) {
     return og_profile_control_valid(f);
@@ -334,6 +356,11 @@ static void derive_radio_key(const uint8_t k[32]) {
     profile_state.phase=OG_PROFILE_IDLE;
     profile_assist_until_ms=0;profile_assist_next_ms=0;
     last_profile_offer_valid=false;
+    auto_enabled=auto_ctrl_pending=auto_peer_enabled=false;
+    auto_seen_control=false;auto_last_accepted_id=auto_last_accepted_session=0;
+    auto_last_metric_id=auto_last_metric_session=0;
+    auto_last_metric_loss_count=0;auto_peer_recent_losses=0;
+    og_auto_reset(&auto_policy,(uint32_t)millis());
     og_arq_bridge_cancel(&arq,&arq_io,"PAIRING_KEY_CHANGED");
 }
 static bool equal_tag(const uint8_t *a,const uint8_t *b) {
@@ -352,7 +379,8 @@ static og_frame_t new_frame(uint8_t type, uint32_t session,uint32_t id) {
  */
 static bool control_add(const og_frame_t *f,uint32_t delay_ms) {
     if(f->type==OG_TYPE_RADIO_ACK || f->type==OG_TYPE_PROFILE_AGREE ||
-       f->type==OG_TYPE_PROFILE_REJECT){
+       f->type==OG_TYPE_PROFILE_REJECT || f->type==OG_TYPE_AUTO_ACK ||
+       f->type==OG_TYPE_AUTO_CTRL){
         for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(
             controls[i].frame.magic && controls[i].frame.type==f->type &&
             controls[i].frame.session==f->session && controls[i].frame.id==f->id){
@@ -366,7 +394,8 @@ static bool control_add(const og_frame_t *f,uint32_t delay_ms) {
     }
     /* Best-effort HELLO traffic must never displace a real radio ACK. */
     if(f->type==OG_TYPE_RADIO_ACK || f->type==OG_TYPE_PROFILE_AGREE ||
-       f->type==OG_TYPE_PROFILE_REJECT){
+       f->type==OG_TYPE_PROFILE_REJECT || f->type==OG_TYPE_AUTO_ACK ||
+       f->type==OG_TYPE_AUTO_CTRL){
         for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_HELLO ||
                                               controls[i].frame.type==OG_TYPE_ARQ_CAPS){
             controls[i].frame=*f;controls[i].due_ms=millis()+delay_ms;return true;
@@ -389,9 +418,10 @@ static esp_err_t tx(const og_frame_t *f) {
 }
 static void profile_report(const char *state) {
     offgrid_sx1278_profile_t p=og_mode_profile(profile_state.current);
-    output("PROFILE|%s|%s|SF=%u|BW=%" PRIu32 "|TX_DBM=%d|AUTO=0\n",
+    if(auto_enabled && profile_state.current==OG_MODE_BALANCED){p.tx_power_dbm=18;p.high_pa_dac=true;}
+    output("PROFILE|%s|%s|SF=%u|BW=%" PRIu32 "|TX_DBM=%d|AUTO=%u\n",
            state,og_mode_name(profile_state.current),(unsigned)p.spreading_factor,
-           (uint32_t)p.bandwidth,(int)p.tx_power_dbm);
+           (uint32_t)p.bandwidth,(int)p.tx_power_dbm,(unsigned)auto_enabled);
 }
 static void profile_reset_pending(void) {
     og_arq_bridge_cancel(&arq,&arq_io,"PROFILE_CHANGED_UNCONFIRMED");
@@ -403,7 +433,7 @@ static void profile_reset_pending(void) {
     }
     memset(controls,0,sizeof(controls));
 }
-static void profile_start_offer(uint8_t target, bool force) {
+static void profile_start_offer(uint8_t target, bool force, bool automatic) {
     if(!radio_key_ready||!sx){output("PROFILE|ERROR|RADIO_NOT_READY\n");return;}
     if(!og_profile_mode_valid(target)){output("PROFILE|ERROR|INVALID_MODE\n");return;}
     if((target==OG_MODE_LOW||target==OG_MODE_MAX)&&!high_pa_verified){
@@ -414,6 +444,10 @@ static void profile_start_offer(uint8_t target, bool force) {
     if(profile_has_pending()&&!force){output("PROFILE|ERROR|PENDING_MESSAGES_USE_FORCE\n");return;}
     if(!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){output("PROFILE|ERROR|NO_AUTHENTICATED_PEER\n");return;}
     if(force)profile_reset_pending();
+    if(!automatic){auto_enabled=false;auto_peer_enabled=false;auto_ctrl_pending=false;}
+    auto_requested_profile=automatic;
+    for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_AUTO_METRIC)
+        controls[i].frame.magic=0;
     profile_state.previous=profile_state.current;
     profile_state.target=target;
     profile_state.phase=OG_PROFILE_OFFERING;
@@ -422,13 +456,16 @@ static void profile_start_offer(uint8_t target, bool force) {
     profile_state.offer_session=boot_session;
     profile_state.attempts=0;
     profile_state.retry_at_ms=0;
-    output("PROFILE|NEGOTIATING|%s|MANUAL=1\n",og_mode_name(target));
+    output("PROFILE|NEGOTIATING|%s|MANUAL=%u\n",og_mode_name(target),(unsigned)!automatic);
 }
 static bool profile_apply(uint8_t mode) {
     offgrid_sx1278_profile_t p=og_mode_profile(mode);
+    if(auto_enabled && mode==OG_MODE_BALANCED){p.tx_power_dbm=18;p.high_pa_dac=true;}
     esp_err_t e=offgrid_sx1278_set_profile(sx,&p);
     if(e!=ESP_OK){output("PROFILE|ERROR|RADIO_CONFIG_%s\n",esp_err_to_name(e));return false;}
     profile_state.current=mode;
+    og_auto_reset(&auto_policy,(uint32_t)millis());
+    auto_defer_until_ms=millis()+OG_AUTO_COOLDOWN_MS;
     /* New data can only flow once an authenticated HELLO proves both peers
      * really switched. Until then, hold normal outgoing transmissions. */
     return true;
@@ -447,6 +484,8 @@ static void profile_service(void) {
     if(profile_state.phase==OG_PROFILE_OFFERING && now>=profile_state.retry_at_ms){
         if(profile_state.attempts>=5){
             profile_state.phase=OG_PROFILE_IDLE;
+            auto_defer_until_ms=millis()+60000;
+            auto_failures++;
             output("PROFILE|TIMEOUT|%s|PEER_DID_NOT_AGREE\n",og_mode_name(profile_state.target));
         }else{
             og_frame_t offer=profile_frame(OG_TYPE_PROFILE_OFFER,profile_state.target,
@@ -461,6 +500,8 @@ static void profile_service(void) {
         if(!profile_apply(profile_state.target)){
             (void)profile_apply(old);
             profile_state.phase=OG_PROFILE_IDLE;
+            auto_defer_until_ms=millis()+60000;
+            auto_failures++;
             profile_report("ROLLED_BACK");return;
         }
         profile_state.phase=OG_PROFILE_VERIFYING;
@@ -474,6 +515,8 @@ static void profile_service(void) {
             profile_state.phase=OG_PROFILE_IDLE;stat_profile_rollbacks++;
             profile_assist_until_ms=0;profile_assist_next_ms=0;
             memset(controls,0,sizeof(controls));
+            auto_defer_until_ms=millis()+60000;
+            auto_failures++;
             profile_report("ROLLED_BACK");
         }else if(now>=profile_state.probe_at_ms){
             /* Authenticated HELLOs let both nodes confirm the new RF profile.
@@ -490,9 +533,105 @@ static void profile_service(void) {
         profile_assist_next_ms=millis()+530+(esp_random()%220);
     }
 }
+static og_frame_t auto_control_frame(uint8_t type,bool enable,uint32_t session,uint32_t nonce){
+    og_frame_t f=new_frame(type,session,nonce);
+    f.length=6;f.data[0]=enable?1u:0u;f.data[1]=enable?0xA5u:0u;
+    for(unsigned i=0;i<4;i++)f.data[i+2]=(uint8_t)(nonce>>(i*8u));
+    return f;
+}
+static void auto_report(const char *state){
+    output("AUTO|%s|MODE=%s|ENABLED=%u|PEER=%u|LEADER=%u|LOCAL_RSSI=%d|PEER_RSSI=%d|LOCAL_SNR_Q4=%d|PEER_SNR_Q4=%d|SAMPLES=%u/%u\n",
+        state,og_mode_name(profile_state.current),(unsigned)auto_enabled,
+        (unsigned)auto_peer_enabled,(unsigned)(peer_seen&&memcmp(own_mac,peer_mac,6)<0),
+        (int)auto_policy.local.rssi_dbm,(int)auto_policy.remote.rssi_dbm,
+        (int)auto_policy.local.snr_q4,(int)auto_policy.remote.snr_q4,
+        (unsigned)auto_policy.local.samples,(unsigned)auto_policy.remote.samples);
+}
+static void auto_command(bool enable){
+    if(!radio_key_ready||!sx||!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){
+        output("AUTO|ERROR|NO_AUTHENTICATED_PEER\n");return;
+    }
+    if(profile_state.phase!=OG_PROFILE_IDLE||auto_ctrl_pending||profile_has_pending()){
+        output("AUTO|ERROR|BUSY_FINISH_TRANSFERS\n");return;
+    }
+    if(enable && !high_pa_verified){
+        output("AUTO|ERROR|VERIFY_BOTH_BOARDS_POWER18_FIRST\n");return;
+    }
+    if(enable==auto_enabled){auto_report(enable?"ON":"OFF");return;}
+    auto_ctrl_pending=true;auto_ctrl_target=enable;
+    auto_ctrl_nonce=next_id++;if(!auto_ctrl_nonce)auto_ctrl_nonce=next_id++;
+    auto_ctrl_session=boot_session;
+    auto_ctrl_retries=0;auto_ctrl_retry_at=0;
+    output("AUTO|NEGOTIATING|%s\n",enable?"ON":"OFF");
+}
+static void auto_service(void){
+    int64_t now=millis();
+    if(auto_ctrl_pending && now>=auto_ctrl_retry_at &&
+       profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
+        if(auto_ctrl_retries>=6){
+            auto_ctrl_pending=false;auto_failures++;
+            output("AUTO|ERROR|PEER_DID_NOT_CONFIRM\n");
+        }else{
+            og_frame_t f=auto_control_frame(OG_TYPE_AUTO_CTRL,auto_ctrl_target,
+                                             auto_ctrl_session,auto_ctrl_nonce);
+            /* Direct from the sole RF owner, identical to the working
+             * profile-offer retry path. No speculative RF CAD gate. */
+            (void)tx(&f);
+            auto_ctrl_retries++;
+            auto_ctrl_retry_at=millis()+1050;
+        }
+    }
+    if(!auto_enabled||profile_state.phase!=OG_PROFILE_IDLE||!peer_seen||
+       now-peer_at_ms>OG_PEER_STALE_MS)return;
+    if(now-auto_last_metric_ms>=OG_AUTO_METRIC_PERIOD_MS &&
+       !profile_has_pending() && !auto_ctrl_pending){
+        auto_last_metric_ms=now+(esp_random()%300)+(own_mac[5]%8)*85;
+        og_frame_t m=new_frame(OG_TYPE_AUTO_METRIC,boot_session,next_id++);
+        m.length=8;
+        const int16_t r=auto_policy.local.rssi_dbm,s=auto_policy.local.snr_q4;
+        m.data[0]=(uint8_t)r;m.data[1]=(uint8_t)((uint16_t)r>>8);
+        m.data[2]=(uint8_t)s;m.data[3]=(uint8_t)((uint16_t)s>>8);
+        m.data[4]=og_auto_fresh(&auto_policy.local,(uint32_t)now)?auto_policy.local.samples:0;
+        m.data[5]=profile_state.current;
+        m.data[6]=1;
+        const uint32_t current_losses=stat_crc+arq.retransmits+arq.ack_timeouts;
+        const uint32_t loss_delta=current_losses-auto_last_metric_loss_count;
+        auto_last_metric_loss_count=current_losses;
+        m.data[7]=(uint8_t)(loss_delta>15?15:loss_delta);
+        (void)control_add(&m,50+(esp_random()%75));
+    }
+    /* Exactly ONE coordinator per peer pair may initiate auto switches. */
+    const bool emergency=og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
+        og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
+        ((profile_state.current==OG_MODE_LOW &&
+          (auto_policy.local.rssi_dbm<=-113 || auto_policy.remote.rssi_dbm<=-113 ||
+           auto_policy.local.snr_q4<=-16 || auto_policy.remote.snr_q4<=-16)) ||
+         (profile_state.current==OG_MODE_BALANCED &&
+          (auto_policy.local.rssi_dbm<=-119 || auto_policy.remote.rssi_dbm<=-119 ||
+           auto_policy.local.snr_q4<=-20 || auto_policy.remote.snr_q4<=-20)));
+    if(memcmp(own_mac,peer_mac,6)>=0 || !auto_peer_enabled ||
+       profile_has_pending() || (now<auto_defer_until_ms && !emergency) || auto_ctrl_pending)return;
+    if((uint32_t)(now-auto_policy.last_decision_ms)<OG_AUTO_METRIC_PERIOD_MS)return;
+    const uint32_t rf_retx=arq.retransmits+arq.ack_timeouts;
+    bool lossy=auto_peer_recent_losses>=2;
+    if(auto_policy.sample_counters_ready){
+        const uint32_t diff=rf_retx-auto_policy.last_local_retx;
+        lossy=lossy || diff>=2u;
+    }
+    auto_policy.last_local_retx=rf_retx;
+    auto_policy.sample_counters_ready=true;
+    auto_peer_recent_losses=0; /* do not reuse a 3.5-second loss report */
+    const uint8_t chosen=og_auto_decide(&auto_policy,profile_state.current,
+                                      (uint32_t)now,false,lossy);
+    if(chosen!=profile_state.current){
+        auto_attempts++;
+        output("AUTO|SELECT|%s|REASON=RSSI_SNR_LOSS\n",og_mode_name(chosen));
+        profile_start_offer(chosen,false,true);
+    }
+}
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.6.1-rc.2|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.7.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -501,17 +640,18 @@ static void show_link(void) {
     for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.magic)ctrl_count++;
     output("LINK|%s|RSSI=%d|PHY=0|MODE=LORA|OK=%" PRIu32 "|RETRY=%" PRIu32
            "|FAIL=%" PRIu32 "|TXOK=%" PRIu32 "|TXFAIL=%" PRIu32 "|RX=%" PRIu32
-           "|HELLO=%" PRIu32 "|CHANGES=0|SNR=NA|RADIOACK=%" PRIu32
+           "|HELLO=%" PRIu32 "|CHANGES=0|SNR_Q4=%d|RADIOACK=%" PRIu32
            "|BADTAG=%" PRIu32 "|CRC=%" PRIu32 "|TXDONE=%" PRIu32
-           "|APPACK=%" PRIu32 "|ARQ_TX=%" PRIu32 "|ARQ_ACKTX=%" PRIu32 "|ARQ_ACKRX=%" PRIu32 "|ARQ_RETX=%" PRIu32 "|ARQ_TIMEOUT=%" PRIu32 "|ARQ_BADMAC=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PEER_ARQ=%u|PROFILE=%s|PROFILE_PHASE=%d|PROFILE_CHANGES=%" PRIu32 "|PROFILE_ROLLBACKS=%" PRIu32 "\n",
+           "|APPACK=%" PRIu32 "|ARQ_TX=%" PRIu32 "|ARQ_ACKTX=%" PRIu32 "|ARQ_ACKRX=%" PRIu32 "|ARQ_RETX=%" PRIu32 "|ARQ_TIMEOUT=%" PRIu32 "|ARQ_BADMAC=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PEER_ARQ=%u|PROFILE=%s|PROFILE_PHASE=%d|PROFILE_CHANGES=%" PRIu32 "|PROFILE_ROLLBACKS=%" PRIu32 "|AUTO=%u|AUTO_PEER=%u|AUTO_ATTEMPTS=%" PRIu32 "|AUTO_FAILURES=%" PRIu32 "\n",
            p,(int)peer_rssi,stat_delivered,stat_retry,stat_fail,stat_tx,stat_tx_errors,
-           stat_rx,stat_hello,stat_radio_ack,stat_badtag,stat_crc,
+           stat_rx,stat_hello,(int)auto_policy.local.snr_q4,stat_radio_ack,stat_badtag,stat_crc,
            stat_tx_done,stat_appack,arq.tx_frames,arq.bitmap_acks_tx,
            arq.bitmap_acks_rx,arq.retransmits,arq.ack_timeouts,
            arq.reject_auth,stat_busy_cad,
            pending_count,ctrl_count,(unsigned)peer_arq_seen,
            og_mode_name(profile_state.current),
-           (int)profile_state.phase,stat_profile_changes,stat_profile_rollbacks);
+           (int)profile_state.phase,stat_profile_changes,stat_profile_rollbacks,
+           (unsigned)auto_enabled,(unsigned)auto_peer_enabled,auto_attempts,auto_failures);
 }
 static og_received_t *history_find(const uint8_t mac[6],uint32_t session,uint32_t id) {
     for(size_t i=0;i<OG_RX_HISTORY;i++)if(received[i].used &&
@@ -528,11 +668,14 @@ static bool peer_accept(const og_frame_t *f,int16_t rssi) {
     if(!memcmp(f->sender,own_mac,6))return false;
     const int64_t t=millis();
     if(peer_seen && memcmp(peer_mac,f->sender,6)!=0 && t-peer_at_ms<OG_PEER_STALE_MS)return false;
-    if(memcmp(peer_mac,f->sender,6)!=0)peer_arq_seen=false;
+    if(memcmp(peer_mac,f->sender,6)!=0){
+        peer_arq_seen=false;auto_enabled=false;auto_peer_enabled=false;
+        auto_ctrl_pending=false;og_auto_reset(&auto_policy,(uint32_t)millis());
+    }
     memcpy(peer_mac,f->sender,6);peer_seen=true;peer_at_ms=t;peer_rssi=rssi;
     return true;
 }
-static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
+static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t snr_q4) {
     if(!radio_key_ready || n<OG_FRAME_HDR_BYTES+OG_AUTH_BYTES || n>OG_AIR_MAX)return;
     const size_t plain=n-OG_AUTH_BYTES;
     og_frame_t f={0};memcpy(&f,bytes,plain);
@@ -543,6 +686,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
     }
     memset(digest,0,sizeof(digest));
     if(!peer_accept(&f,rssi))return;
+    og_auto_quality_note(&auto_policy.local,rssi,snr_q4,(uint32_t)millis());
     stat_rx++;
     /* A correct HMAC on the NEW profile is the final confirmation. */
     if(profile_state.phase==OG_PROFILE_VERIFYING){
@@ -551,8 +695,85 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
         profile_assist_until_ms=millis()+3200;
         profile_assist_next_ms=millis()+120+(esp_random()%180);
         profile_report("ACTIVE");
+        if(auto_enabled)auto_report("ACTIVE");
     }
     if(f.type==OG_TYPE_HELLO){stat_hello++;return;}
+    if(f.type==OG_TYPE_AUTO_CTRL){
+        if(profile_state.phase!=OG_PROFILE_IDLE || profile_has_pending())return;
+        const bool requested=f.data[0]!=0;
+        /* Authentication and wire-length validation were already completed.
+         * Track increasing IDs within the sender's boot session to reject
+         * replays of older settings. Duplicate latest command is ACKed. */
+        if(auto_seen_control && f.session==auto_last_accepted_session &&
+           f.id<auto_last_accepted_id)return;
+        if(!auto_seen_control || f.session!=auto_last_accepted_session ||
+           f.id!=auto_last_accepted_id){
+            auto_seen_control=true;auto_last_accepted_session=f.session;
+            auto_last_accepted_id=f.id;
+            const bool before=auto_enabled;
+            auto_enabled=requested;
+            if(requested)high_pa_verified=true; /* authenticated operator approval for both */
+            if(profile_state.current==OG_MODE_BALANCED &&
+               !profile_apply(OG_MODE_BALANCED)){
+                auto_enabled=before;
+                auto_seen_control=false; /* let peer retry this exact nonce */
+                output("AUTO|ERROR|RF_CONFIG_FAILED\n");return;
+            }
+            auto_ctrl_pending=false;
+            auto_last_metric_ms=millis()+(own_mac[5]%8)*85;
+            auto_peer_enabled=requested;
+            og_auto_reset(&auto_policy,(uint32_t)millis());
+            auto_defer_until_ms=millis()+10000;
+            if(requested){
+                /* Prefer Fast once enough stable two-way samples arrive. */
+                auto_policy.changed_ms=(uint32_t)millis()-OG_AUTO_COOLDOWN_MS;
+                auto_policy.started_ms=(uint32_t)millis()-OG_AUTO_PROMOTION_MS;
+                auto_defer_until_ms=millis()+11000;
+            }
+            profile_report("ACTIVE");
+            auto_report(requested?"PEER_ON":"PEER_OFF");
+        }
+        og_frame_t reply=auto_control_frame(OG_TYPE_AUTO_ACK,requested,f.session,f.id);
+        (void)control_add(&reply,30+(esp_random()%35));
+        return;
+    }
+    if(f.type==OG_TYPE_AUTO_ACK){
+        if(auto_ctrl_pending && f.session==auto_ctrl_session &&
+           f.id==auto_ctrl_nonce && f.data[0]==(uint8_t)auto_ctrl_target){
+            auto_ctrl_pending=false;
+            const bool before=auto_enabled;
+            auto_enabled=auto_ctrl_target;
+            if(profile_state.current==OG_MODE_BALANCED &&
+               !profile_apply(OG_MODE_BALANCED)){
+                auto_enabled=before;auto_failures++;
+                output("AUTO|ERROR|LOCAL_RF_CONFIG_FAILED_RESET_BOTH\n");return;
+            }
+            auto_last_metric_ms=millis()+(own_mac[5]%8)*85;
+            auto_peer_enabled=auto_ctrl_target;
+            og_auto_reset(&auto_policy,(uint32_t)millis());
+            if(auto_enabled){
+                auto_policy.changed_ms=(uint32_t)millis()-OG_AUTO_COOLDOWN_MS;
+                auto_policy.started_ms=(uint32_t)millis()-OG_AUTO_PROMOTION_MS;
+                auto_defer_until_ms=millis()+11000;
+            }
+            profile_report("ACTIVE");
+            auto_report(auto_enabled?"ON":"OFF");
+        }
+        return;
+    }
+    if(f.type==OG_TYPE_AUTO_METRIC){
+        if(f.data[5]!=profile_state.current ||
+           (f.session==auto_last_metric_session && f.id<=auto_last_metric_id))return;
+        auto_last_metric_session=f.session;auto_last_metric_id=f.id;
+        auto_peer_enabled=f.data[6]!=0;
+        auto_peer_recent_losses=f.data[7];
+        if(auto_enabled&&auto_peer_enabled&&f.data[4]>=3){
+            const int16_t rssi=(int16_t)((uint16_t)f.data[0]|(uint16_t)f.data[1]<<8);
+            const int16_t snr=(int16_t)((uint16_t)f.data[2]|(uint16_t)f.data[3]<<8);
+            og_auto_quality_note(&auto_policy.remote,rssi,snr,(uint32_t)millis());
+        }
+        return;
+    }
     if(f.type==OG_TYPE_ARQ_CAPS){
         if(f.length==1 && f.data[0]==1){peer_arq_seen=true;peer_arq_at_ms=millis();}
         return;
@@ -569,6 +790,15 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
             return;
         }
         if(profile_state.phase==OG_PROFILE_IDLE){
+            if(og_profile_is_auto(&f) && !auto_enabled){
+                og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
+                (void)control_add(&reject,10);return;
+            }
+            if(!og_profile_is_auto(&f)){
+                auto_enabled=false;auto_peer_enabled=false;auto_ctrl_pending=false;
+                output("AUTO|OFF|MANUAL_PEER\n");
+            }
+            auto_requested_profile=og_profile_is_auto(&f);
             if(last_profile_offer_valid && f.id==last_profile_offer_nonce &&
                f.session==last_profile_offer_session &&
                !memcmp(f.sender,last_profile_offer_mac,6))return;
@@ -603,7 +833,8 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi) {
     if(f.type==OG_TYPE_PROFILE_AGREE){
         if(profile_state.phase==OG_PROFILE_OFFERING && profile_nonce_valid(&f) &&
            profile_state.nonce==f.id && profile_state.offer_session==f.session &&
-           profile_state.target==f.data[0]){
+           profile_state.target==f.data[0] &&
+           og_profile_is_auto(&f)==auto_requested_profile){
             profile_state.phase=OG_PROFILE_WAIT_SWITCH;
             profile_state.switch_at_ms=millis()+OG_PROFILE_SWITCH_GRACE_MS;
             output("PROFILE|AGREED|%s\n",og_mode_name(profile_state.target));
@@ -672,15 +903,16 @@ static void queue_data(const og_command_t *c) {
     }
 }
 static void process_command(const og_command_t *c) {
-    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");return;}
-    if(c->type==CMD_PROFILE){profile_start_offer(c->profile_target,c->force_profile);return;}
+    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");auto_report(auto_enabled?"ON":"OFF");return;}
+    if(c->type==CMD_PROFILE){profile_start_offer(c->profile_target,c->force_profile,false);return;}
+    if(c->type==CMD_AUTO_ON || c->type==CMD_AUTO_OFF){auto_command(c->type==CMD_AUTO_ON);return;}
     if(c->type==CMD_HIGH_PA_ON){
         high_pa_verified=true;
         output("POWER18|ENABLED|REQUIRES_STABLE_3V3\n");return;
     }
     if(c->type==CMD_HIGH_PA_OFF){
-        if(profile_state.current==OG_MODE_LOW||profile_state.current==OG_MODE_MAX){
-            output("POWER18|ERROR|LEAVE_HIGH_POWER_FIRST\n");return;
+        if(auto_enabled || profile_state.current==OG_MODE_LOW || profile_state.current==OG_MODE_MAX){
+            output("POWER18|ERROR|DISABLE_AUTO_AND_LEAVE_HIGH_POWER_FIRST\n");return;
         }
         high_pa_verified=false;output("POWER18|DISABLED\n");return;
     }
@@ -763,7 +995,7 @@ static void service_queues(void) {
                 f->type!=OG_TYPE_PROFILE_REJECT))continue;
             const int rank=(f->type==OG_TYPE_RADIO_ACK)?0:
                            (f->type==OG_TYPE_PROFILE_AGREE || f->type==OG_TYPE_PROFILE_REJECT)?1:
-                           (f->type==OG_TYPE_HELLO?2:1);
+                           (f->type==OG_TYPE_HELLO || f->type==OG_TYPE_AUTO_METRIC?2:1);
             if(rank!=priority || (waiting_for_ack && rank!=0))continue;
             if(arq.tx_used && peer_arq_seen && f->type==OG_TYPE_ARQ_CAPS)continue;
             /* Discovery cannot consume airtime while real peer traffic is
@@ -861,13 +1093,16 @@ static void radio_loop(void *arg) {
                 if(arq.reject_auth==was){
                     peer_at_ms=millis();peer_arq_at_ms=millis();
                     stat_rx++;peer_rssi=info.rssi_dbm;arq_auth_rx++;
+                    og_auto_quality_note(&auto_policy.local,info.rssi_dbm,
+                        (int16_t)(info.snr_db*4.0f),(uint32_t)millis());
                 }
                 else stat_badtag++;
-            }else received_frame(bytes,n,info.rssi_dbm);
+            }else received_frame(bytes,n,info.rssi_dbm,(int16_t)(info.snr_db*4.0f));
         }
         else if(e==ESP_ERR_INVALID_RESPONSE)stat_crc++;
         int64_t now=millis();
         profile_service();
+        auto_service();
         const int64_t hello_interval=peer_seen?OG_HELLO_MS:OG_DISCOVERY_HELLO_MS;
         if(profile_state.phase==OG_PROFILE_IDLE && now>=profile_assist_until_ms && radio_key_ready && now-last_hello_ms>=hello_interval){
             last_hello_ms=now+(esp_random()%450);
@@ -950,9 +1185,9 @@ static bool queue_command(const og_command_t *c) {
 static void parse_line(const char *line,bool ble) {
     og_command_t c={0};
     if(!strcmp(line,"STATUS")){c.type=CMD_STATUS;queue_command(&c);return;}
-    if(!strcmp(line,"HELP")){output("HELP|BULKBEGIN,BULKCHUNK,BULKEND,STATUS,PROFILE,POWER18 VERIFIED,KEYGET,KEYSET,KEYSTATUS,CAPS\n");return;}
+    if(!strcmp(line,"HELP")){output("HELP|BULKBEGIN,BULKCHUNK,BULKEND,STATUS,PROFILE LOW/BALANCED/MAX,AUTO ON/OFF,POWER18 VERIFIED,KEYGET,KEYSET,KEYSTATUS,CAPS\n");return;}
     if(!strcmp(line,"CAPS") || !strcmp(line,"CAPS?")){
-        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=MANUAL3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=0|VOICE=0|WIFI=0|BLE=1\n");return;
+        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=AUTO3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=0|VOICE=0|WIFI=0|BLE=1\n");return;
     }
     if(!strcmp(line,"POWER18 VERIFIED")){
         if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
@@ -962,6 +1197,10 @@ static void parse_line(const char *line,bool ble) {
     if(!strcmp(line,"POWER18 OFF")){
         if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
         c.type=CMD_HIGH_PA_OFF;queue_command(&c);return;
+    }
+    if(!strcmp(line,"AUTO ON")||!strcmp(line,"AUTO OFF")){
+        c.type=!strcmp(line,"AUTO ON")?CMD_AUTO_ON:CMD_AUTO_OFF;
+        queue_command(&c);return;
     }
     if(!strncmp(line,"PROFILE ",8)){
         char name[20]={0},extra[16]={0};
