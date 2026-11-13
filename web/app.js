@@ -2,8 +2,8 @@
 /* OffGrid Messenger LoRa v1.6.0: encrypted text over SX1278 / USB Serial.
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
-const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=18000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.8.0-rc2-lora';
+const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
+const APP_VERSION='1.8.0-rc3-lora';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -1321,10 +1321,10 @@ function voiceButtonState(){
  btn.classList.toggle('recording',active);
  btn.setAttribute('aria-pressed',String(active));
  btn.setAttribute('aria-label',active?'Stop and send voice message':'Record voice message');
- btn.title=active?'Stop and send voice note':'Record encrypted voice note (20 KiB; typically 7–12 seconds)';
+ btn.title=active?'Stop and send voice note':'Record encrypted voice note (40 KiB max; actual duration depends on compression)';
  if(active){
   const elapsed=Math.min(MAX_VOICE_MS,Date.now()-currentVoiceRecording.started);
-  $('composerStatus').textContent=`🔴 Recording voice · ${Math.floor(elapsed/1000)}s · 20 KiB maximum · tap mic to send`;
+  $('composerStatus').textContent=`🔴 Recording voice · ${Math.floor(elapsed/1000)}s · ${formatBytes(currentVoiceRecording.capturedBytes)} / 40 KiB · tap mic to send`;
  }else if(verified&&secretKey){
   $('composerStatus').textContent='Encrypted media · LoRa v1.8';
  }
@@ -1346,12 +1346,12 @@ async function toggleVoiceRecording(){
  if(!mime){toast('No supported microphone audio format in this browser.');return;}
  let stream;
  try{
-  stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
+  stream=await navigator.mediaDevices.getUserMedia({audio:{channelCount:{ideal:1},echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
   if(!verified||!secretKey){stream.getTracks().forEach(track=>track.stop());return;}
-  const recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:16000});
+  const recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:8000});
   const v={recorder,stream,chunks:[],capturedBytes:0,started:Date.now(),cancelled:false,mime};
   currentVoiceRecording=v;
-  recorder.ondataavailable=event=>{if(event.data?.size){v.chunks.push(event.data);v.capturedBytes+=event.data.size;if(v.capturedBytes>=15*1024&&recorder.state!=='inactive')stopVoiceRecording();}};
+  recorder.ondataavailable=event=>{if(event.data?.size){v.chunks.push(event.data);v.capturedBytes+=event.data.size;if(v.capturedBytes>=Media.MAX_VOICE-3*1024&&recorder.state!=='inactive')stopVoiceRecording();}};
   recorder.onerror=event=>{console.warn('MediaRecorder error',event.error);v.cancelled=true;stopVoiceRecording(true);toast('Voice recording failed.');};
   recorder.onstop=async()=>{
    const durationMs=Math.max(100,Math.min(MAX_VOICE_MS,Date.now()-v.started));
@@ -1362,7 +1362,7 @@ async function toggleVoiceRecording(){
    if(v.cancelled)return;
    try{
     const blob=new Blob(v.chunks,{type:recorder.mimeType||mime});
-    if(blob.size>Media.MAX_VOICE)throw Error('Voice note exceeded 20 KiB. Record a shorter clip; browser codec may exceed its target bitrate.');
+    if(blob.size>Media.MAX_VOICE)throw Error('Voice note exceeded 40 KiB. This browser could not compress the full recording to the limit; try a shorter note.');
     if(blob.size<256)throw Error('Recording is empty or too short.');
     if(!verified||!secretKey)throw Error('ESP32 disconnected; recording discarded.');
     const bytes=new Uint8Array(await blob.arrayBuffer());
@@ -1503,13 +1503,13 @@ function showInfo(){showDialog('LoRa chat information',body=>{
   ['Peer',radioTelemetry.peer],
   ['Radio RSSI',radioTelemetry.rssi===null?'Unknown':radioTelemetry.rssi+' dBm'],
   ['Security',secretKey?'AES-256-GCM key loaded from ESP32 NVS':'Not paired'],
-  ['Photos / voice','Encrypted ≤48 KiB photos / ≤20 KiB short Opus voice notes'],
+  ['Photos / voice','Encrypted ≤48 KiB photos / ≤40 KiB Opus voice notes (up to 2 min if size permits)'],
   ['History','Browser IndexedDB encrypted using your pairing key']];
  for(const [title,value] of rows){const row=el('div','info-line');row.append(el('span','',title),el('strong','',value));body.append(row);}
  body.append(el('p','','Single gray tick = SX1278 TxDone for all fragments. Double gray = authenticated encrypted delivery receipt. Double blue = authenticated read receipt. A timeout means unconfirmed, not definitely undelivered.'));
  });}
 function showSettings(){showDialog('LoRa settings',body=>{
- body.append(el('p','','OffGrid Messenger LoRa v1.8: compressed photos and short Opus voice notes are encrypted and segmented, with limited retries. Auto RF may choose Fast when both directions have safe signal margin and fall back based on losses. Manual modes stay in control. Two-minute natural-sounding speech cannot fit in 20 KiB.'));
+ body.append(el('p','','OffGrid Messenger LoRa v1.8: compressed photos and short Opus voice notes are encrypted and segmented, with limited retries. Auto RF may choose Fast when both directions have safe signal margin and fall back based on losses. Manual modes stay in control. Voice recording is capped at 40 KiB and 120 seconds; natural continuous speech may reach the byte cap well before two minutes.'));
  const buttons=el('div','settings-actions');
  for(const [name,action] of [['Rename contact',showRename],['Node pairing key',showPairing],
    ['USB diagnostics',diagnoseUsb],['Automatic / manual LoRa modes',showProfileDialog],['LoRa speed test',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){

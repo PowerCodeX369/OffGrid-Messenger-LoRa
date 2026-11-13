@@ -61,7 +61,7 @@ function parseFrame(data){
 /* Voice messages carry a one-byte authenticated codec tag inside the GCM
  * envelope. Durations travel in the existing envelope's width field (ms).
  * No unencrypted audio is ever sent to ESP-NOW or stored in browser history. */
-const VOICE_MAX=20*1024,VOICE_MAX_MS=120000;
+const VOICE_MAX=40*1024,VOICE_MAX_MS=120000;
 const voiceCodecs=Object.freeze([
   {id:0,mime:'audio/webm',preferred:'audio/webm;codecs=opus'},
   {id:1,mime:'audio/ogg',preferred:'audio/ogg;codecs=opus'},
