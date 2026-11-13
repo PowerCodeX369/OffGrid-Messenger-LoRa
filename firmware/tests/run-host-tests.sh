@@ -58,6 +58,9 @@ node --check web/lora_receipts.js
 node --check web/app.js
 node --check web/protocol.js
 node --check web/lora_media.js
+node --check web/lora_rx_guard.js
+node firmware/tests/test-lora-rx-guard.cjs
+node firmware/tests/test-lora-security-fuzz.cjs
 node firmware/tests/test-lora-media.cjs
 node firmware/tests/test-lora-voice-40k.cjs
 node firmware/tests/test-protocol.cjs

@@ -14,7 +14,7 @@ with sync_playwright() as p:
     page.on('pageerror',lambda e:errors.append(str(e)))
     page.set_content(html)
     for name in ['protocol.js','adaptive.js','lora_delivery.js','lora_scheduler.js','lora_bulk.js',
-                 'lora_benchmark.js','lora_receipts.js','lora_media.js','app.js']:
+                 'lora_benchmark.js','lora_receipts.js','lora_media.js','lora_rx_guard.js','app.js']:
         page.add_script_tag(content=(root/name).read_text())
     result=page.evaluate('''async()=>{
       let commands=[];

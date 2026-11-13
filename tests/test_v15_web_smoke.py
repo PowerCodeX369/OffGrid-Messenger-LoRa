@@ -16,7 +16,7 @@ with sync_playwright() as playwright:
     page.on('pageerror', lambda error: errors.append(str(error)))
     page.set_content(html)
     for name in ['protocol.js','adaptive.js','lora_delivery.js','lora_scheduler.js',
-                 'lora_benchmark.js','lora_receipts.js','lora_bulk.js','app.js']:
+                 'lora_benchmark.js','lora_receipts.js','lora_bulk.js','lora_media.js','lora_rx_guard.js','app.js']:
         page.add_script_tag(content=(root / name).read_text())
     page.locator('#settingsButton').click()
     page.get_by_role('button', name='Automatic / manual LoRa modes').click()

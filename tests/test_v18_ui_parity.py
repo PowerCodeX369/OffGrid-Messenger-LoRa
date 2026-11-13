@@ -27,7 +27,7 @@ with sync_playwright() as playwright:
             page.add_style_tag(content=styles)
             for name in ('protocol.js', 'adaptive.js', 'lora_delivery.js', 'lora_scheduler.js',
                          'lora_bulk.js', 'lora_benchmark.js', 'lora_media.js',
-                         'lora_receipts.js', 'app.js'):
+                         'lora_receipts.js', 'lora_rx_guard.js', 'app.js'):
                 page.add_script_tag(content=(root / name).read_text())
             page.evaluate("verified=true; localMac='AA:BB:CC:DD:EE:FF'; secretKey=new Uint8Array(32).fill(7); refreshStatus()")
             if width <= 720:
