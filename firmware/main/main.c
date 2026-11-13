@@ -80,6 +80,13 @@ static bool usb_irq_rx = false;
  * negotiation still requires authenticated OFFER/AGREE from BOTH nodes.
  * Expiration guards against a crashed/disconnected web client. */
 static int64_t media_active_until_ms;
+/* A temporary media boost is a signed two-node PROFILE transaction. Keep
+ * the user's manual setting AND Auto-enabled state unchanged. No RF payload
+ * is sent until the new profile is authenticated on-air. */
+static bool media_boost_active, media_requested_profile, media_restore_requested;
+static uint8_t media_original_mode;
+static uint8_t media_restore_attempts;
+static int64_t media_restore_retry_ms;
 
 static const uint8_t KDF_CONTEXT[] = "OffGrid-LoRa-HMAC-v1";
 
@@ -201,8 +208,10 @@ static bool profile_has_pending(void) {
 }
 static og_frame_t profile_frame(uint8_t type, uint8_t target, uint32_t session, uint32_t nonce) {
     og_frame_t f=og_profile_control_frame(type,target,own_mac,session,nonce);
-    if(auto_requested_profile && (type==OG_TYPE_PROFILE_OFFER || type==OG_TYPE_PROFILE_AGREE))
-        f.data[5]|=OG_PROFILE_AUTO_FLAG;
+    if(type==OG_TYPE_PROFILE_OFFER || type==OG_TYPE_PROFILE_AGREE){
+        if(media_requested_profile)f.data[5]|=OG_PROFILE_MEDIA_FLAG;
+        else if(auto_requested_profile)f.data[5]|=OG_PROFILE_AUTO_FLAG;
+    }
     return f;
 }
 static bool profile_nonce_valid(const og_frame_t *f) {
@@ -438,7 +447,7 @@ static void profile_reset_pending(void) {
     }
     memset(controls,0,sizeof(controls));
 }
-static void profile_start_offer(uint8_t target, bool force, bool automatic) {
+static void profile_start_offer(uint8_t target, bool force, bool automatic, bool media) {
     if(!radio_key_ready||!sx){output("PROFILE|ERROR|RADIO_NOT_READY\n");return;}
     if(!og_profile_mode_valid(target)){output("PROFILE|ERROR|INVALID_MODE\n");return;}
     if((target==OG_MODE_LOW||target==OG_MODE_MAX)&&!high_pa_verified){
@@ -449,8 +458,9 @@ static void profile_start_offer(uint8_t target, bool force, bool automatic) {
     if(profile_has_pending()&&!force){output("PROFILE|ERROR|PENDING_MESSAGES_USE_FORCE\n");return;}
     if(!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){output("PROFILE|ERROR|NO_AUTHENTICATED_PEER\n");return;}
     if(force)profile_reset_pending();
-    if(!automatic){auto_enabled=false;auto_peer_enabled=false;auto_ctrl_pending=false;}
+    if(!automatic && !media){auto_enabled=false;auto_peer_enabled=false;auto_ctrl_pending=false;}
     auto_requested_profile=automatic;
+    media_requested_profile=media;
     for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_AUTO_METRIC)
         controls[i].frame.magic=0;
     profile_state.previous=profile_state.current;
@@ -492,6 +502,12 @@ static void profile_service(void) {
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
             output("PROFILE|TIMEOUT|%s|PEER_DID_NOT_AGREE\n",og_mode_name(profile_state.target));
+            if(media_requested_profile){
+                if(profile_state.target==OG_MODE_LOW){
+                    media_boost_active=false;
+                    output("MEDIA|BYPASS|BOOST_HANDSHAKE_TIMEOUT\n");
+                }else output("MEDIA|RESTORE_RETRY|PEER_DID_NOT_AGREE\n");
+            }
         }else{
             og_frame_t offer=profile_frame(OG_TYPE_PROFILE_OFFER,profile_state.target,
                                            profile_state.offer_session,profile_state.nonce);
@@ -507,7 +523,11 @@ static void profile_service(void) {
             profile_state.phase=OG_PROFILE_IDLE;
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
-            profile_report("ROLLED_BACK");return;
+            profile_report("ROLLED_BACK");
+            if(media_requested_profile && profile_state.target==OG_MODE_LOW){
+                media_boost_active=false;output("MEDIA|BYPASS|FAST_RADIO_CONFIG_FAILED\n");
+            }
+            return;
         }
         profile_state.phase=OG_PROFILE_VERIFYING;
         profile_state.verify_deadline_ms=millis()+OG_PROFILE_VERIFY_MS;
@@ -523,6 +543,11 @@ static void profile_service(void) {
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
             profile_report("ROLLED_BACK");
+            if(media_requested_profile && profile_state.target==OG_MODE_LOW){
+                media_boost_active=false;output("MEDIA|BYPASS|FAST_VERIFY_TIMEOUT\n");
+            }else if(media_requested_profile){
+                output("MEDIA|RESTORE_RETRY|VERIFY_TIMEOUT\n");
+            }
         }else if(now>=profile_state.probe_at_ms){
             /* Authenticated HELLOs let both nodes confirm the new RF profile.
              * No application traffic or benchmark traffic until verified. */
@@ -571,7 +596,7 @@ static void auto_command(bool enable){
 }
 static void auto_service(void){
     int64_t now=millis();
-    if(media_active_until_ms && now>=media_active_until_ms)media_active_until_ms=0;
+    /* Media session expiry and restore are owned by media_service(). */
     if(auto_ctrl_pending && now>=auto_ctrl_retry_at &&
        profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
         if(auto_ctrl_retries>=6){
@@ -616,6 +641,7 @@ static void auto_service(void){
           (auto_policy.local.rssi_dbm<=-119 || auto_policy.remote.rssi_dbm<=-119 ||
            auto_policy.local.snr_q4<=-20 || auto_policy.remote.snr_q4<=-20)));
     if(memcmp(own_mac,peer_mac,6)>=0 || !auto_peer_enabled ||
+       (media_boost_active && profile_state.current==OG_MODE_LOW && !emergency) ||
        profile_has_pending() || (now<auto_defer_until_ms && !emergency) || auto_ctrl_pending)return;
     if((uint32_t)(now-auto_policy.last_decision_ms)<OG_AUTO_METRIC_PERIOD_MS)return;
     const uint32_t rf_retx=arq.retransmits+arq.ack_timeouts;
@@ -632,12 +658,44 @@ static void auto_service(void){
     if(chosen!=profile_state.current){
         auto_attempts++;
         output("AUTO|SELECT|%s|REASON=RSSI_SNR_LOSS\n",og_mode_name(chosen));
-        profile_start_offer(chosen,false,true);
+        profile_start_offer(chosen,false,true,false);
     }
+}
+/* Media hint expiration and restoration run only on the RF owner task.
+ * Authenticated OFFER/AGREE and HELLO verify the return on BOTH radios.
+ * Busy handling never calls profile_reset_pending(). */
+static void media_service(void){
+    const int64_t now=millis();
+    if(media_boost_active && media_active_until_ms && now>=media_active_until_ms){
+        media_active_until_ms=0;
+        if(profile_state.current!=media_original_mode){
+            /* A crashed client cannot send MEDIA OFF. Only the elected low-MAC
+             * peer initiates expired-session recovery, avoiding crossed offers. */
+            if(peer_seen && memcmp(own_mac,peer_mac,6)<0)media_restore_requested=true;
+        }else {media_boost_active=false;media_restore_requested=false;}
+    }
+    if(!media_restore_requested || !media_boost_active ||
+       profile_state.phase!=OG_PROFILE_IDLE || profile_has_pending() ||
+       now<media_restore_retry_ms)return;
+    if(profile_state.current==media_original_mode){
+        media_boost_active=false;media_restore_requested=false;
+        output("MEDIA|RESTORED|MODE=%s\n",og_mode_name(profile_state.current));return;
+    }
+    if(!peer_seen || now-peer_at_ms>OG_PEER_STALE_MS){
+        media_restore_retry_ms=now+2200;
+        output("MEDIA|RESTORE_WAIT|NO_AUTHENTICATED_PEER\n");return;
+    }
+    if(media_restore_attempts>=3){
+        media_restore_requested=false;
+        output("MEDIA|RESTORE_FAILED|MANUAL_RECOVERY_REQUIRED\n");return;
+    }
+    media_restore_attempts++;
+    media_restore_retry_ms=now+3000;
+    profile_start_offer(media_original_mode,false,false,true);
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -701,6 +759,15 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         profile_assist_until_ms=millis()+3200;
         profile_assist_next_ms=millis()+120+(esp_random()%180);
         profile_report("ACTIVE");
+        if(media_requested_profile && media_boost_active){
+            if(profile_state.current==OG_MODE_LOW){
+                output("MEDIA|READY|MODE=LOW\n");
+            }else if(profile_state.current==media_original_mode){
+                media_boost_active=false;media_restore_requested=false;
+                media_restore_attempts=0;media_active_until_ms=0;
+                output("MEDIA|RESTORED|MODE=%s\n",og_mode_name(profile_state.current));
+            }
+        }
         if(auto_enabled)auto_report("ACTIVE");
     }
     if(f.type==OG_TYPE_HELLO){stat_hello++;return;}
@@ -800,11 +867,23 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
                 og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
                 (void)control_add(&reject,10);return;
             }
-            if(!og_profile_is_auto(&f)){
+            const bool media_offer=og_profile_is_media(&f);
+            if(media_offer && f.data[0]!=OG_MODE_LOW &&
+               (!media_boost_active || f.data[0]!=media_original_mode)){
+                og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
+                (void)control_add(&reject,10);return;
+            }
+            if(!og_profile_is_auto(&f) && !media_offer){
                 auto_enabled=false;auto_peer_enabled=false;auto_ctrl_pending=false;
+                media_boost_active=false;media_restore_requested=false;
                 output("AUTO|OFF|MANUAL_PEER\n");
             }
+            if(media_offer && f.data[0]==OG_MODE_LOW && !media_boost_active){
+                media_boost_active=true;media_original_mode=profile_state.current;
+                media_active_until_ms=millis()+10*60*1000;
+            }
             auto_requested_profile=og_profile_is_auto(&f);
+            media_requested_profile=media_offer;
             if(last_profile_offer_valid && f.id==last_profile_offer_nonce &&
                f.session==last_profile_offer_session &&
                !memcmp(f.sender,last_profile_offer_mac,6))return;
@@ -833,6 +912,10 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
            profile_state.target==f.data[0]){
             profile_state.phase=OG_PROFILE_IDLE;
             output("PROFILE|ERROR|PEER_BUSY_FINISH_TRANSFERS_AND_RETRY\n");
+            if(media_requested_profile && profile_state.target==OG_MODE_LOW){
+                media_boost_active=false;
+                output("MEDIA|BYPASS|PEER_BUSY\n");
+            }
         }
         return;
     }
@@ -840,7 +923,8 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         if(profile_state.phase==OG_PROFILE_OFFERING && profile_nonce_valid(&f) &&
            profile_state.nonce==f.id && profile_state.offer_session==f.session &&
            profile_state.target==f.data[0] &&
-           og_profile_is_auto(&f)==auto_requested_profile){
+           og_profile_is_auto(&f)==auto_requested_profile &&
+           og_profile_is_media(&f)==media_requested_profile){
             profile_state.phase=OG_PROFILE_WAIT_SWITCH;
             profile_state.switch_at_ms=millis()+OG_PROFILE_SWITCH_GRACE_MS;
             output("PROFILE|AGREED|%s\n",og_mode_name(profile_state.target));
@@ -909,32 +993,57 @@ static void queue_data(const og_command_t *c) {
     }
 }
 static void process_command(const og_command_t *c) {
-    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");auto_report(auto_enabled?"ON":"OFF");output("MEDIA|STATUS|ACTIVE=%u\n",(unsigned)(media_active_until_ms>millis()));return;}
-    if(c->type==CMD_PROFILE){profile_start_offer(c->profile_target,c->force_profile,false);return;}
+    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");auto_report(auto_enabled?"ON":"OFF");output("MEDIA|STATUS|ACTIVE=%u|BOOST=%u|RETURN=%s\n",(unsigned)(media_active_until_ms>millis()),(unsigned)media_boost_active,og_mode_name(media_boost_active?media_original_mode:profile_state.current));return;}
+    if(c->type==CMD_PROFILE){profile_start_offer(c->profile_target,c->force_profile,false,false);return;}
     if(c->type==CMD_AUTO_ON || c->type==CMD_AUTO_OFF){auto_command(c->type==CMD_AUTO_ON);return;}
     if(c->type==CMD_MEDIA_OFF){
         media_active_until_ms=0;
-        output("MEDIA|OFF|PROFILE=%s\n",og_mode_name(profile_state.current));return;
+        if(media_boost_active && profile_state.current!=media_original_mode){
+            /* Do not abort the final radio bitmap ACK or encrypted receipt.
+             * media_service() will negotiate the original profile once idle. */
+            media_restore_requested=true;
+            media_restore_retry_ms=0;
+            output("MEDIA|RESTORE_PENDING|%s\n",og_mode_name(media_original_mode));
+        }else{
+            if(profile_state.phase==OG_PROFILE_IDLE)media_boost_active=false;
+            output("MEDIA|OFF|PROFILE=%s\n",og_mode_name(profile_state.current));
+        }
+        return;
     }
     if(c->type==CMD_MEDIA_ON){
         const int64_t now=millis();
         media_active_until_ms=now+10*60*1000;
-        /* AUTO is explicit opt-in. Manual mode is NEVER silently overridden.
-         * Boost only when BOTH authenticated receivers report ample margin.
-         * Never force Fast on a weak link: the same signed auto mode handles
-         * fallback using RSSI, SNR and real packet-loss evidence. */
-        bool good=auto_enabled && auto_peer_enabled && high_pa_verified &&
-            og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
-            og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
-            auto_policy.local.rssi_dbm> -96 && auto_policy.remote.rssi_dbm> -96 &&
-            auto_policy.local.snr_q4> -12 && auto_policy.remote.snr_q4> -12 &&
-            auto_peer_recent_losses==0;
-        if(good && profile_state.current!=OG_MODE_LOW &&
-           profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
-            output("MEDIA|BOOST_REQUEST|LOW\n");
-            profile_start_offer(OG_MODE_LOW,false,true);
-        }else output("MEDIA|ACTIVE|MODE=%s|BOOST=%s\n",
-            og_mode_name(profile_state.current),good?"ALREADY_OR_BUSY":"SIGNAL_MARGIN_OR_AUTO_DISABLED");
+        if(profile_state.phase!=OG_PROFILE_IDLE){
+            output("MEDIA|ERROR|PROFILE_TRANSITION_IN_PROGRESS\n");return;
+        }
+        if(profile_state.current==OG_MODE_LOW){
+            output("MEDIA|READY|MODE=LOW\n");return;
+        }
+        if(media_boost_active){
+            output("MEDIA|BYPASS|PREVIOUS_MEDIA_MODE_UNSETTLED\n");return;
+        }
+        /* In Auto, avoid forcing a weak two-way link into Fast. In manual
+         * mode, the authenticated profile handshake/rollback is the safety
+         * gate, with the operator's explicit both-board PA authorization. */
+        if(!high_pa_verified){output("MEDIA|BYPASS|POWER18_NOT_VERIFIED\n");return;}
+        if(profile_state.phase!=OG_PROFILE_IDLE || profile_has_pending() ||
+           !peer_seen || now-peer_at_ms>OG_PEER_STALE_MS){
+            output("MEDIA|BYPASS|PEER_OR_RADIO_BUSY\n");return;
+        }
+        const bool both_fresh=og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
+                              og_auto_fresh(&auto_policy.remote,(uint32_t)now);
+        if(auto_enabled && both_fresh &&
+           (auto_policy.local.rssi_dbm<=-106 || auto_policy.remote.rssi_dbm<=-106 ||
+            auto_policy.local.snr_q4<=-4 || auto_policy.remote.snr_q4<=-4 ||
+            auto_peer_recent_losses>=2)){
+            output("MEDIA|BYPASS|FAST_LINK_MARGIN_INSUFFICIENT\n");return;
+        }
+        media_original_mode=profile_state.current;
+        media_boost_active=true;
+        media_restore_requested=false;
+        media_restore_attempts=0;
+        output("MEDIA|BOOST_REQUEST|LOW|RETURN=%s\n",og_mode_name(media_original_mode));
+        profile_start_offer(OG_MODE_LOW,false,false,true);
         return;
     }
     if(c->type==CMD_HIGH_PA_ON){
@@ -1133,6 +1242,7 @@ static void radio_loop(void *arg) {
         else if(e==ESP_ERR_INVALID_RESPONSE)stat_crc++;
         int64_t now=millis();
         profile_service();
+        media_service();
         auto_service();
         const int64_t hello_interval=peer_seen?OG_HELLO_MS:OG_DISCOVERY_HELLO_MS;
         if(profile_state.phase==OG_PROFILE_IDLE && now>=profile_assist_until_ms && radio_key_ready && now-last_hello_ms>=hello_interval){

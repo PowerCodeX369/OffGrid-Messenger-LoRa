@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.8.0-rc3-lora';
+const APP_VERSION='1.8.0-rc4-lora';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -17,6 +17,7 @@ let currentProfile='BALANCED', profileTransition=false, autoMode=false, autoBusy
 let profileRadio={sf:7,bw:250000,power:10};
 const profileLabels={LOW:'Fast / Nominal 18 dBm',BALANCED:'Balanced',MAX:'Max Power / Range'};
 let highPaVerified=false;
+let mediaResponseWaiter=null;
 
 let pendingNodeGet=null,pendingNodeSet=null;
 /* USB diagnostics: distinguish missing console output from incompatible or old firmware. */
@@ -952,6 +953,73 @@ function onRadio(type,session,id,extra){
   clearSlot(slot);slot.reject(Error(extra||'Radio acknowledgment missing'));
  }
 }
+/* A media RF change is a temporary, signed two-radio operation. The USB
+ * write finishing does NOT mean the other ESP32 changed its modem. Wait for
+ * MEDIA|READY after a genuine authenticated RF profile confirmation. */
+async function mediaModeCommand(command,accepted,timeoutMs){
+ if(mediaResponseWaiter)throw Error('Another media mode command is pending');
+ let finish;
+ const reply=new Promise((resolve,reject)=>{
+  const timer=setTimeout(()=>{
+   if(mediaResponseWaiter?.finish===finish){
+    mediaResponseWaiter=null;reject(Error('Timed out waiting for synchronized media mode'));
+   }
+  },timeoutMs);
+  finish=(line,error)=>{
+   clearTimeout(timer);
+   if(mediaResponseWaiter?.finish===finish)mediaResponseWaiter=null;
+   if(error)reject(error);else resolve(line);
+  };
+  mediaResponseWaiter={accepted:new Set(accepted),finish};
+ });
+ try{
+  // Attach a rejection handler before USB I/O so no timer rejection can leak.
+  const [,line]=await Promise.all([writeLine(command),reply]);
+  return line;
+ }catch(e){
+  if(mediaResponseWaiter?.finish===finish)finish(null,e);
+  throw e;
+ }
+}
+function onMediaLine(line){
+ const parts=line.split('|'),kind=parts[1];
+ if(kind==='RESTORE_FAILED')toast('Media RF restore failed; check both radio profiles before the next transfer');
+ if(kind==='BYPASS')logUsb('MEDIA: Fast skipped: '+(parts[2]||'unknown'));
+ if(mediaResponseWaiter?.accepted.has(kind))mediaResponseWaiter.finish(line);
+}
+async function beginMediaFastSession(){
+ // Do not start a media send while an unrelated manual/Auto profile change
+ // is still being authenticated. A timeout leaves the chat retryable.
+ if(profileTransition){
+  const deadline=Date.now()+12000;
+  while(profileTransition&&Date.now()<deadline)await wait(120);
+  if(profileTransition)throw Error('A previous RF profile switch is still pending');
+ }
+ if(currentProfile!=='LOW'&&!highPaVerified){
+  const permitted=confirm('For this photo or voice note, temporarily use Fast (+18 dBm) on BOTH LoRa boards and return to the previous mode afterward? I have verified both boards, 433 MHz antennas, stable 3.3 V under TX load, module limits and local radio permissions.');
+  if(!permitted){logUsb('MEDIA: operator declined temporary high-power Fast');return false;}
+  await writeLine('POWER18 VERIFIED');
+ }
+ const line=await mediaModeCommand('MEDIA ON',['READY','BYPASS','ERROR'],18000);
+ if(line.startsWith('MEDIA|ERROR|'))throw Error('Media RF preflight: '+line.slice(12));
+ if(line.startsWith('MEDIA|BYPASS|')){
+  toast('Fast unavailable; sending media on the current reliable LoRa mode');
+  return true;
+ }
+ if(line!=='MEDIA|READY|MODE=LOW')throw Error('Media Fast readiness was not confirmed');
+ logUsb('MEDIA: synchronized Fast confirmed on the sender');
+ return true;
+}
+async function endMediaFastSession(){
+ if(!writer)return;
+ try{
+  const reply=await mediaModeCommand('MEDIA OFF',['RESTORED','OFF','RESTORE_FAILED'],20000);
+  if(reply.startsWith('MEDIA|RESTORED|'))logUsb('MEDIA: previous synchronized radio mode restored');
+ }catch(e){
+  logUsb('MEDIA: restore unconfirmed: '+e.message);
+  toast('Radio profile restoration unconfirmed; check both devices before sending again');
+ }
+}
 /* Full encrypted OGM4 ciphertext staged over USB once. Firmware owns the
  * 224-byte RF fragments, burst window and authenticated bitmap retransmit.
  * Never acknowledge an application message merely for USB staging. */
@@ -966,10 +1034,11 @@ async function transferMedia(job){
  const pieces=await Media.split(r.kind,r.mime,r.bytes),w=r.kind==='voice'?r.durationMs&0xffff:r.width,
        h=r.kind==='voice'?Math.floor(r.durationMs/65536):r.height;
  const start=performance.now();let retries=0;
- if(autoMode){try{await writeLine('MEDIA ON');await wait(700);
-     const until=Date.now()+12000;while(profileTransition&&Date.now()<until)await wait(150);
-   }catch(e){console.warn('Unable to signal media session',e);}}
  try{
+  // Always request Fast for media, even if the user's normal mode is manual
+  // Balanced/Range. The firmware may safely bypass on a weak or busy link.
+  // Never send a single media fragment while a Fast switch is unconfirmed.
+  await beginMediaFastSession();
   for(let i=0;i<pieces.length;i++){
    if(r.cancelRequested)throw Error('Media transfer paused by user; tap to retry');
    if(!verified||!secretKey)throw Error('Disconnected; media is available to retry');
@@ -1001,7 +1070,9 @@ async function transferMedia(job){
   job.totalFrames=Math.ceil((r.bytes.length+pieces.length*80)/224);
   job.mediaMetrics={durationMs:performance.now()-start,segments:pieces.length,retries};
  }finally{
-  if(autoMode&&writer)void writeLine('MEDIA OFF').catch(()=>{});
+  // Await the signed return handshake before the next queued message starts.
+  // Also clean up if encryption, cancellation or a radio segment failed.
+  if(writer)await endMediaFastSession();
  }
 }
 async function transferFragments(packet,job){
@@ -1155,7 +1226,7 @@ async function requestProfileChange(mode){
  }catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
 }
 function showProfileDialog(){showDialog('Automatic + manual LoRa modes',body=>{
- body.append(el('p','','Automatic mode prioritizes Fast. As both directions weaken it steps to Balanced, then Range; it returns toward Fast after sustained improvement. Both ESP32s must run v1.8.0-rc.1. Mode changes use the proven signed one-browser handshake and rollback. There is no fixed distance threshold.'));
+ body.append(el('p','','Automatic mode prioritizes Fast. As both directions weaken it steps to Balanced, then Range; it returns toward Fast after sustained improvement. Both ESP32s must run v1.8.0-rc.4. Mode changes use the proven signed one-browser handshake and rollback. There is no fixed distance threshold.'));
  const automatic=el('button','primary-button',autoMode?'Turn automatic mode OFF':'Enable automatic mode');
  automatic.disabled=!verified||autoBusy||profileTransition;
  automatic.onclick=()=>{closeDialog();void requestAutoMode(!autoMode);};body.append(automatic);
@@ -1197,6 +1268,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
   toast(highPaVerified?'High-PA authorization accepted on the initiating node':'High-PA authorization disabled or refused');return;
  }
  if(bulkLink?.onLine(s))return;
+ if(s.startsWith('MEDIA|')){onMediaLine(s);return;}
  if(s.startsWith('PROFILE|')){onProfileLine(s);return;}
  if(s.startsWith('AUTO|')){onAutoLine(s);return;}
  if(s.startsWith('LINK|')){
@@ -1212,7 +1284,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')||!parts.includes('MEDIA=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.8.0-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('MEDIAFAST=1')||!parts.includes('FW=1.8.0-rc.4')||!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')||!parts.includes('MEDIA=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.8.0-rc.4 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
@@ -1262,6 +1334,7 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
  speedDiagnostics.capable=false;speedDiagnostics.sackCapable=false;clearSelectiveAcks();
  try{if(handshakeTimer)clearInterval(handshakeTimer);handshakeTimer=null;if(usbWaitTimer){clearInterval(usbWaitTimer);usbWaitTimer=null;}if(reader)try{await reader.cancel();}catch{}if(readPromise)try{await readPromise;}catch{}if(writer){try{writer.releaseLock();}catch{}writer=null;}if(port){try{await port.close();}catch{}port=null;}}
  finally{
+  if(mediaResponseWaiter)mediaResponseWaiter.finish(null,Error('Disconnected'));
   finishNodeKeyRequest('get',null,Error('Disconnected'));finishNodeKeyRequest('set',null,Error('Disconnected'));
   readPromise=null;serialBuffer='';verified=false;port=null;writer=null;clearUsbHint();if(pendingRadio())failPendingRadio(Error('Disconnected'));if(activeTransfer?.record)void setState(activeTransfer.record,'failed','Disconnected');
  transferQueue=[];runningTransfers=false;
@@ -1496,7 +1569,7 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.8.0-rc.1'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.8.0-rc.4'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
   ['Profile',`${autoMode?'Automatic · ':'Manual · '}${profileLabels[currentProfile]}: SF${profileRadio.sf} / ${profileRadio.bw/1000} kHz / CR 4/5 / TX ${profileRadio.power} dBm`],
