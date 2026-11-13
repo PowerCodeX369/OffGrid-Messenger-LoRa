@@ -17,14 +17,19 @@ assert 'audioBitsPerSecond:8000' in web and 'blob.size>Media.MAX_VOICE' in web
 assert "$('attachments').disabled=!ready" in web and "$('voiceButton').disabled=!ready" in web
 assert 'if(job.record&&!job.mediaSegment)' in web and 'await setState(job.record,\'sent\')' in web
 assert 'watchDeliveryReceipt(job.record,chunks.media?' in web
-assert "if(autoMode){try{await writeLine('MEDIA ON')" in web
-assert "writeLine('MEDIA OFF')" in web
+assert "mediaModeCommand('MEDIA ON',['READY','BYPASS','ERROR'],18000)" in web
+assert "mediaModeCommand('MEDIA OFF',['RESTORED','OFF','RESTORE_FAILED'],20000)" in web
+assert 'await beginMediaFastSession()' in web and 'await endMediaFastSession()' in web
 assert "if(r.cancelRequested)throw Error" in web
 assert "c->type==CMD_MEDIA_ON" in fw and "c->type==CMD_MEDIA_OFF" in fw
 assert 'og_auto_fresh(&auto_policy.local' in fw and 'og_auto_fresh(&auto_policy.remote' in fw
-assert 'profile_start_offer(OG_MODE_LOW,false,true)' in fw
+assert 'profile_start_offer(OG_MODE_LOW,false,false,true)' in fw
 assert 'MEDIA=1' in fw and 'PHOTO=1|VOICE=1' in fw
 assert "!strcmp(line,\"MEDIA ON\")" in fw and 'if(ble){output("MEDIA|ERROR|USB_ONLY' in fw
 assert 'OG_SR_MAX_TRANSFER' in fw and 'BULKCHUNK' in fw
 assert 'MAX' in (root/'firmware/main/lora_modes.h').read_text()
-print('PASS: media AES-GCM segment gate, whole-file digest, strict 48/40 KiB budgets, safe AUTO-only Fast hint')
+assert 'media_restore_requested' in fw and 'media_service();' in fw
+assert 'OG_PROFILE_MEDIA_FLAG' in (root/'firmware/main/lora_profile_control.h').read_text()
+assert 'MEDIA|RESTORED' in fw and 'MEDIA|READY' in fw
+assert 'MEDIAFAST=1' in fw and 'MEDIAFAST=1' in web
+print('PASS: AES-GCM 48/40 KiB media, temporary signed Fast handover, receipt-preserving deferred restore')

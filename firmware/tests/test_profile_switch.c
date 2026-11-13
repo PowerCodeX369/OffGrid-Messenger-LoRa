@@ -26,6 +26,21 @@ int main(void){
         request.id--;request.length=5;
         assert(!og_wire_valid(&request,og_wire_length(&request))); /* rejects old format */
     }
+    /* Temporary media mode override is a separately authenticated control
+     * intent. It must not be mistaken for permanent manual or Auto state. */
+    for(uint8_t mode=OG_MODE_LOW;mode<=OG_MODE_MAX;mode++){
+        og_frame_t media=og_profile_control_frame(OG_TYPE_PROFILE_OFFER,mode,alice,25u,0xFE129411u);
+        media.data[5]|=OG_PROFILE_MEDIA_FLAG;
+        assert(og_profile_control_valid(&media));
+        assert(og_profile_is_media(&media) && !og_profile_is_auto(&media));
+        media.type=OG_TYPE_PROFILE_AGREE;
+        assert(og_profile_control_valid(&media));
+        media.data[5]|=OG_PROFILE_AUTO_FLAG;
+        assert(!og_profile_control_valid(&media)); /* no ambiguous intent */
+        media.data[5]&=(uint8_t)~OG_PROFILE_AUTO_FLAG;
+        media.data[5]^=0x01u; /* mutated intent or approval is invalid */
+        assert(!og_profile_control_valid(&media));
+    }
     og_frame_t reject=og_profile_control_frame(OG_TYPE_PROFILE_REJECT,OG_MODE_MAX,alice,25u,0xFE129411u);
     assert(og_wire_valid(&reject,og_wire_length(&reject)));
     assert(og_profile_control_valid(&reject));
