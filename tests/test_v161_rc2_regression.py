@@ -20,10 +20,16 @@ for name in [
     'web/lora_receipts.js',
     'web/lora_scheduler.js',
     'web/lora_benchmark.js',
-    'web/protocol.js',
     'web/lora_delivery.js'
 ]:
     assert new(name)==old(name),'v1.6.1 known-working data path changed: '+name
+# The new media envelope type and stricter voice budget must be explicit;
+# no existing OGM4 encrypt/decrypt, text, or receipt behavior is rewritten.
+protocol=new('web/protocol.js').decode()
+old_protocol=old('web/protocol.js').decode()
+assert protocol.replace('receiptBatch:11,mediaPart:12','receiptBatch:11').replace(
+    'const VOICE_MAX=20*1024,VOICE_MAX_MS=120000;',
+    'const VOICE_MAX=384*1024,VOICE_MAX_MS=120000;')==old_protocol
 src=new('firmware/main/main.c').decode()
 baseline=old('firmware/main/main.c').decode()
 section=lambda x,start,end:x[x.index(start):x.index(end,x.index(start))]

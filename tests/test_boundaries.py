@@ -21,7 +21,9 @@ assert 'OG_TYPE_RADIO_ACK' in main and 'OG_TYPE_DELIVERED' in main
 assert 'OG_TYPE_READ' in main and 'PSA_ALG_HMAC(PSA_ALG_SHA_256)' in main
 assert 'ESP-NOW</span>' not in ui and 'ESP-NOW channel 6' not in web
 assert "writeLine('RATE '" not in web
-assert "$('attachments').disabled=true" in web and "$('voiceButton').disabled=true" in web
+assert "$('attachments').disabled=!ready" in web and "$('voiceButton').disabled=!ready" in web
+assert 'OffGridLoRaMedia' in web and 'Media.Reassembler' in web
+assert 'MEDIA=1' in main and 'MEDIA=1' in web
 assert 'urgentReceipts' in web and 'runUrgentReceipts' in web
 assert 'FragmentScheduler' in web and 'rfScheduler.submit' in web
 assert 'FLOW=2' in main and 'FLOW=2' in web
@@ -42,11 +44,11 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.7.0-rc.1" in main and "1.7.0-rc1-lora" in web
+assert "1.8.0-rc.1" in main and "1.8.0-rc1-lora" in web
 assert 'PROFILES=3' in main and 'PROFILES=3' in web and 'SYNC=ONE_CLICK' in main and 'SYNC=ONE_CLICK' in web
 assert 'ARQ=1' in main and 'ARQ=1' in web
 assert 'BULKBEGIN' in main and 'BulkLink' in web
-assert 'AUTO ON/OFF,POWER18 VERIFIED' in main
+assert 'AUTO ON/OFF,MEDIA ON/OFF,POWER18 VERIFIED' in main
 assert 'profileTransition' in web and 'showProfileDialog' in web
 # Source copied to Android is truly unchanged against the imported ESP-NOW
 # repository. The pinned reference hash list is checked during packaging.

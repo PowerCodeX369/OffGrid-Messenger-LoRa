@@ -57,6 +57,8 @@ node --check web/lora_benchmark.js
 node --check web/lora_receipts.js
 node --check web/app.js
 node --check web/protocol.js
+node --check web/lora_media.js
+node firmware/tests/test-lora-media.cjs
 node firmware/tests/test-protocol.cjs
 node firmware/tests/test-adaptive.cjs
 node firmware/tests/test-diagnostic-protocol.cjs
@@ -69,3 +71,5 @@ python3 tests/test_v15_profile.py
 python3 tests/test_v161_rc2_regression.py
 python3 tests/test_v17_adaptive.py
 if command -v clang >/dev/null 2>&1; then sh firmware/tests/run-syntax-checks.sh; fi
+
+python3 tests/test_v18_media.py
