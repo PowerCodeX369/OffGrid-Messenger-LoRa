@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.8.0-rc6-lora';
+const APP_VERSION='1.10.0-rc1-lora';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -46,7 +46,8 @@ function diagnoseUsb(){
  });
 }
 
-let db=null,records=[],recordMap=new Map(),photoUrls=new Map(),voiceUrls=new Map(),incoming=new Map(),recentTransfers=new Map();
+let db=null,records=[],recordMap=new Map(),photoUrls=new Map(),voiceUrls=new Map(),incoming=new Map();
+const rxGuard=new globalThis.OffGridLoRaRxGuard.AuthenticatedRxGuard();
 let currentVoiceRecording=null,voiceTimer=null;
 const mediaReassembler=new Media.Reassembler(4);
 let transferQueue=[],activeTransfer=null,runningTransfers=false;
@@ -635,14 +636,14 @@ async function adoptNodeKey(raw){
   await dbDelete('keys',macKey());
   if(n)toast(`Migrated ${n} browser-encrypted messages to the node key.`);
  }
- secretKey=key;
+ secretKey=key;rxGuard.clear();
  await migrateLegacy();
  await hydrateHistory();
  refreshStatus();sendReadReceipts();
 }
 
 function incomingKey(mac,session,transferId){return mac+':'+session+':'+transferId;}
-function pruneIncoming(){const t=Date.now();for(const [k,v] of incoming){if(t-v.updated>4*60_000)incoming.delete(k);}for(const [k,t0] of recentTransfers){if(t-t0>12*60_000)recentTransfers.delete(k);}while(recentTransfers.size>512)recentTransfers.delete(recentTransfers.keys().next().value);}
+function pruneIncoming(){const t=Date.now();for(const [k,v] of incoming){if(t-v.updated>4*60_000)incoming.delete(k);}rxGuard.prune();}
 function flushSelectiveAck(key){
  const group=sackGroups.get(key);
  if(!group)return;
@@ -682,10 +683,11 @@ async function processRx(mac,session,packetId,rawHex){
  const key=incomingKey(mac,session,fr.transferId);
  /* A duplicate of an already decrypted transfer is safe to APPACK again.
   * Do NOT acknowledge unverified encrypted data to the application layer. */
- if(recentTransfers.has(key)){
+ if(rxGuard.state(key)==='accepted'){
   void writeLine(`APPACK ${mac} ${session} ${packetId}`).catch(()=>{});
   return;
  }
+ if(rxGuard.state(key)==='pending'){rxGuard.note(key,packetId);return;}
  let state=incoming.get(key);
  if(!state){
   if(incoming.size>=5){const oldest=incoming.keys().next().value;incoming.delete(oldest);}
@@ -698,35 +700,44 @@ async function processRx(mac,session,packetId,rawHex){
  state.updated=Date.now();
  if(state.received!==state.count)return;
  incoming.delete(key);
- const payload=P.concat(...state.chunks);
- if(payload.length!==state.total)return;
+ const ticket=rxGuard.begin(key,state.packetIds);
+ if(!ticket)return; // bounded: sender retries if all validation slots are busy
+ const payload=P.concat(...state.chunks),keyAtStart=secretKey;
+ if(payload.length!==state.total){rxGuard.reject(ticket);return;}
  try{
-  const plain=await P.open(secretKey,payload,fr.transferId),env=P.parseEnvelope(plain);
+  const plain=await P.open(keyAtStart,payload,fr.transferId),env=P.parseEnvelope(plain);
+  if(!verified||secretKey!==keyAtStart){rxGuard.reject(ticket);return;}
   if(![P.types.text,P.types.delivered,P.types.read,P.types.edit,
-        P.types.delete,P.types.played,P.types.probe,P.types.probeAck,P.types.receiptBatch].includes(env.kind))return;
+        P.types.delete,P.types.played,P.types.probe,P.types.probeAck,P.types.receiptBatch].includes(env.kind)){rxGuard.reject(ticket);return;}
   await handleEnvelope(env,mac);
-  recentTransfers.set(key,Date.now());
+  if(!verified||secretKey!==keyAtStart){rxGuard.reject(ticket);return;}
+  rxGuard.accept(ticket);
   /* Hardware-level ACK was automatic. APPACK here records that the whole
    * message decrypted and was processed by this application. These are
    * local USB commands and do NOT trigger separate over-air packets. */
-  for(const id of state.packetIds){
+  for(const id of ticket.packetIds){
    void writeLine(`APPACK ${mac} ${session} ${id}`).catch(()=>{});
   }
  }catch(e){
+  rxGuard.reject(ticket);
   console.warn('Encrypted message rejected:',e);
   toast('Encrypted transfer rejected: wrong pairing key, corrupted data, or authentication failure.');
  }
 }
 async function processRxBulk(mac,transferId,ciphertext){
  if(!verified||!secretKey||!(ciphertext instanceof Uint8Array))return;
- const key=`ARQ:${mac}:${transferId}`;
- if(recentTransfers.has(key))return;
+ const key=`ARQ:${mac}:${transferId}`,ticket=rxGuard.begin(key);
+ if(!ticket)return; // duplicate already processed/in progress, or guard at capacity
+ const keyAtStart=secretKey;
  try{
-  const plain=await P.open(secretKey,ciphertext,transferId);
+  const plain=await P.open(keyAtStart,ciphertext,transferId);
   const env=P.parseEnvelope(plain);
+  if(!verified||secretKey!==keyAtStart){rxGuard.reject(ticket);return;}
   await handleEnvelope(env,mac);
-  recentTransfers.set(key,Date.now());
+  if(!verified||secretKey!==keyAtStart){rxGuard.reject(ticket);return;}
+  rxGuard.accept(ticket);
  }catch(e){
+  rxGuard.reject(ticket);
   console.warn('Authenticated LoRa bulk rejected',e);
   toast('Encrypted LoRa transfer rejected: authentication or format failure');
  }
@@ -1401,7 +1412,7 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
   readPromise=null;serialBuffer='';verified=false;port=null;writer=null;clearUsbHint();if(pendingRadio())failPendingRadio(Error('Disconnected'));if(activeTransfer?.record)void setState(activeTransfer.record,'failed','Disconnected');
  transferQueue=[];runningTransfers=false;
   if(receiptBatchTimer!==null){clearTimeout(receiptBatchTimer);receiptBatchTimer=null;}
-  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();mediaReassembler.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;autoBusy=false;autoMode=false;highPaVerified=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
+  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();rxGuard.clear();mediaReassembler.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;autoBusy=false;autoMode=false;highPaVerified=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
 async function sendText(){
  if(profileTransition){toast('Wait for the LoRa profile switch to finish');return;}
 const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
@@ -1585,7 +1596,7 @@ function closeDialog(){$('modalBackdrop').classList.add('hidden');}
 function el(tag,cl='',text=''){const out=document.createElement(tag);if(cl)out.className=cl;out.textContent=text;return out;}
 async function installPairKey(raw){
  if(!verified||!localMac)throw Error('Connect a node first');
- if(runningTransfers||pendingRadio()||transferQueue.length)throw Error('Finish active transfers before changing keys');
+ if(runningTransfers||pendingRadio()||transferQueue.length||rxGuard.pending.size)throw Error('Finish active transfers and incoming authentication before changing keys');
  if(secretKey&&!confirm('Replace the key stored on this ESP32? Both ESP32 nodes must use the SAME key. Encrypted history will be migrated locally when possible.'))return false;
  const key=await P.importKey(raw);
  /* Verify that existing history can be decrypted before changing the node key. */
@@ -1595,7 +1606,7 @@ async function installPairKey(raw){
  await setNodeKey(raw);
  if(current&&rows.length)await rewrapHistory(current,key);
  await dbDelete('keys',macKey());
- secretKey=key;
+ secretKey=key;rxGuard.clear();
  await migrateLegacy();await hydrateHistory();refreshStatus();sendReadReceipts();return true;
 }
 function showPairing(){
