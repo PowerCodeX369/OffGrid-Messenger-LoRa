@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.8.0-rc4-lora';
+const APP_VERSION='1.8.0-rc5-lora';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -1024,7 +1024,7 @@ async function endMediaFastSession(){
  * 224-byte RF fragments, burst window and authenticated bitmap retransmit.
  * Never acknowledge an application message merely for USB staging. */
 /* Media reliability is layered over the unchanged v1.7 ARQ worker.
- * A 48 KiB photo becomes up to nine independent AES-GCM bulk transfers,
+ * A 48 KiB photo becomes seven independent AES-GCM bulk transfers,
  * each with its own RF bitmap ACK, and is digest-checked at the recipient.
  * Retry only a failed segment; the receiver deduplicates identical parts.
  * Both ESP32s remain free to negotiate AUTO changes at segment boundaries. */
@@ -1033,12 +1033,19 @@ async function transferMedia(job){
  if(!r?.bytes)throw Error('No encrypted media bytes available');
  const pieces=await Media.split(r.kind,r.mime,r.bytes),w=r.kind==='voice'?r.durationMs&0xffff:r.width,
        h=r.kind==='voice'?Math.floor(r.durationMs/65536):r.height;
- const start=performance.now();let retries=0;
+ const start=performance.now();let retries=0, outcome='OK';
+ // End-to-end diagnostic counters contain sizes and timing only, NEVER
+ // filenames, contents, ciphertext, keys or identifiers. No RF changes.
+ const perf={preflight:0,restore:0,usb:0,rfWait:0,rfDevice:0,
+             frames:0,retransmits:0,timeouts:0,segments:0};
+ const previousMode=currentProfile;
  try{
   // Always request Fast for media, even if the user's normal mode is manual
   // Balanced/Range. The firmware may safely bypass on a weak or busy link.
   // Never send a single media fragment while a Fast switch is unconfirmed.
-  await beginMediaFastSession();
+  const preflightStart=performance.now();
+  try{await beginMediaFastSession();}
+  finally{perf.preflight=performance.now()-preflightStart;}
   for(let i=0;i<pieces.length;i++){
    if(r.cancelRequested)throw Error('Media transfer paused by user; tap to retry');
    if(!verified||!secretKey)throw Error('Disconnected; media is available to retry');
@@ -1056,6 +1063,15 @@ async function transferMedia(job){
     const sub={kind:'mediaPart',control:false,record:r,mediaSegment:true};
     try{
      await transferFragments({transferId:tid,ciphertext},sub);
+     const m=sub.bulkMetrics||{};
+     perf.usb+=m.usbStageMs||0;
+     perf.rfWait+=m.radioWaitMs||0;
+     perf.rfDevice+=m.RF_MS||0;
+     perf.frames+=m.FRAMES||0;
+     perf.retransmits+=m.RETX||0;
+     perf.timeouts+=m.TIMEOUT||0;
+     perf.segments++;
+     logUsb(`MEDIASEG|${i+1}/${pieces.length}|BYTES=${part.length-28}|USB_MS=${Math.round(m.usbStageMs||0)}|RFWAIT_MS=${Math.round(m.radioWaitMs||0)}|RF_MS=${Math.round(m.RF_MS||0)}|FRAMES=${m.FRAMES??'?'}|RETX=${m.RETX??'?'}|TIMEOUT=${m.TIMEOUT??'?'}`);
      complete=true;
     }catch(e){
      lastError=e;retries++;
@@ -1068,11 +1084,19 @@ async function transferMedia(job){
    await setProgress(r,percent);
   }
   job.totalFrames=Math.ceil((r.bytes.length+pieces.length*80)/224);
-  job.mediaMetrics={durationMs:performance.now()-start,segments:pieces.length,retries};
- }finally{
+ }catch(e){outcome='FAILED';throw e;}
+ finally{
   // Await the signed return handshake before the next queued message starts.
   // Also clean up if encryption, cancellation or a radio segment failed.
+  const restoreStart=performance.now();
   if(writer)await endMediaFastSession();
+  perf.restore=performance.now()-restoreStart;
+  const wall=performance.now()-start;
+  const unaccounted=Math.max(0,wall-perf.preflight-perf.restore-perf.usb-perf.rfWait);
+  job.mediaMetrics={durationMs:wall,segments:perf.segments,retries,
+    preflightMs:perf.preflight,restoreMs:perf.restore,usbMs:perf.usb,
+    radioWaitMs:perf.rfWait,deviceRfMs:perf.rfDevice,unaccountedMs:unaccounted};
+  logUsb(`MEDIAPERF|${outcome}|FROM=${previousMode}|BYTES=${r.bytes.length}|SEG=${perf.segments}/${pieces.length}|WALL_MS=${Math.round(wall)}|PRE_MS=${Math.round(perf.preflight)}|USB_MS=${Math.round(perf.usb)}|RFWAIT_MS=${Math.round(perf.rfWait)}|RF_MS=${Math.round(perf.rfDevice)}|OTHER_MS=${Math.round(unaccounted)}|RESTORE_MS=${Math.round(perf.restore)}|FRAMES=${perf.frames}|RETX=${perf.retransmits}|TIMEOUT=${perf.timeouts}|RETRIES=${retries}`);
  }
 }
 async function transferFragments(packet,job){
