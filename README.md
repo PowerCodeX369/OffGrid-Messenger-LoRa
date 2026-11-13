@@ -1,31 +1,33 @@
 # OffGrid Messenger LoRa
 
-**v1.6.1-rc.2 — restored working v1.6.1 transport, one-click synchronized manual profiles, three modes**
+**v1.7.0-rc.1 — optional automatic three-mode LoRa link adaptation with Fast priority, authenticated peer synchronization, and manual override**
 
 Independent SX1278/Ra-02 + ESP32-C3 Super Mini firmware, browser messenger, source/test history, and preserved original Android application. Maintained under PowerCodeX. This is **LoRa-only** firmware: no Wi-Fi or ESP-NOW initialization; the original ESP-NOW repository is separate and unchanged.
 
-> **Measured working baseline:** The user's v1.6.1-rc.1 **Balanced** benchmark transferred eight 1,024-byte encrypted tests at **457.4 bytes/s, 1.95 s median RTT, 8/8 confirmed**. Seven trials reported zero retransmissions, while one trial required two and took 3.39 seconds. This v1.6.1-rc.2 update **does not modify the working ARQ, SX1278 driver, USB staging, AES encryption or receipt engines**. It fixes manual profile synchronization only; there is **no claimed throughput increase**.
+> **Measured working baseline:** The user's v1.6.1 Balanced test confirmed **8/8 encrypted 1,024-byte messages, 457.4 B/s and 1.95 s median RTT**. The user subsequently confirmed **v1.6.1-rc.2 messaging and one-click manual synchronization work perfectly**. **v1.7 preserves that version's ARQ transport, SX1278 driver, USB bulk, AES-GCM, read/delivered receipts, and Android files byte-for-byte.** Only radio control/quality telemetry, automatic policy and the web UI were added. No new field throughput or range figures are claimed.
 
-> **Release status: SOURCE CANDIDATE.** Host C/JavaScript tests, simulated ARQ loss injection and browser UI checks pass. **No ESP-IDF build or live two-radio rc.2 synchronization test was completed here.** Keep the v1.6.1-rc.1 firmware/web archive as your known-working rollback, not v1.6.2/v1.6.3. See [v1.6.1-rc.2 synchronization repair and acceptance](docs/V1_6_1_RC2_ONE_CLICK_SYNC.md).
+> **Release status: SOURCE CANDIDATE.** Host C/JavaScript tests, simulated ARQ loss injection and Chromium UI checks pass. **No full ESP-IDF 6.1 build or physical two-node automatic switch has been performed in this environment.** Keep the **user-confirmed working v1.6.1-rc.2 ZIP** as your rollback. A matched v1.7 firmware/web client is required on both nodes. See [automatic link adaptation and hardware acceptance](docs/V1_7_0_ADAPTIVE_RF.md).
 
 ## What works in source
 
 - AES-256-GCM end-to-end encrypted text, local encrypted message history, authenticated delivered/read receipts and correct single/double/blue ticks. The radio only sees encrypted OGM4 ciphertext plus authenticated but visible RF metadata.
-- Dedicated ESP32-C3 SX1278 LoRa worker and 433 MHz manual three-profile system. Manual, authenticated peer offer/agree and timed rollback remain; reboot returns to Balanced.
+- Dedicated ESP32-C3 SX1278 LoRa worker and 433 MHz three-profile system. **Automatic adaptation is opt-in**, prefers Fast, uses both directions' authenticated RSSI/SNR and recent RF retries, and coordinates mode changes using the **proven authenticated one-click OFFER/AGREE + rollback**. Manual override still works; reboot recovers in manual Balanced.
 - **Integrated v1.6 selective-repeat engine:** transfer encrypted ciphertext in one bounded USB bulk transaction; send up to six **224-byte ciphertext RF fragments** per SF7 burst (three in slow Max Range), then one HMAC-authenticated bitmap ACK; retransmit only missing fragments. RF frames are max **254 bytes** including header and 16-byte radio tag, within SX1278 FIFO's 255-byte limit.
 - **Real encrypted LoRa speed test** in browser Settings (64–1024-byte probes, multiple trials, application goodput, median/p95 RTT, confirmed/unconfirmed). No fake raw-PHY throughput claims.
 - USB Web Serial and existing NimBLE service preserved in firmware. BLE/Android app is **not connected to the new v1.6 bulk transport**, and voice/images/video remain disabled pending further reliability and throughput testing.
 - New v1.6 authenticated peer-capability handshake: both radios must be updated; old v1.5 peers do not silently accept the incompatible new ARQ data frames.
 
-## Manual LoRa modes and safety
+## Automatic Fast-first LoRa modes, manual override and safety
 
 | Mode | SX1278 settings | Output power | Status |
 |---|---|---:|---|
 | **Fast / Low** | SF7 · BW500 kHz · CR4/5 | nominal **+18 dBm** | Initiating user explicitly confirms **both** boards are suitable |
-| **Balanced** (boot default) | SF7 · BW250 kHz · CR4/5 | **+10 dBm** | Safe starting mode for RF testing |
+| **Balanced** (boot default) | SF7 · BW250 kHz · CR4/5 | **+10 dBm manual / nominal +18 dBm in Auto** | Extra link margin in Auto, safe manual default |
 | **Max / Range** | SF9 · BW125 kHz · CR4/5 | nominal **+18 dBm** | Same two-board confirmation; deliberately slower but more link budget |
 
 The Ai-Thinker Ra-02 may be sold as an 18 dBm nominal-output module, but that is **not proof of achievable or safe RF power on every board**. v1.6 uses the SX1278 high PA_DAC register path for an 18 dBm *requested* level. Before using Fast/Max, check power supply under TX load, correct 433 MHz antenna, module variant and local radio rules. For Fast or Max, select the mode on **one browser only**. The prompt asks the initiating operator to check **both** radios/antennas/power supplies and local RF regulations. The browser sends `POWER18 VERIFIED` locally when needed, then `PROFILE LOW` or `PROFILE MAX`; a 6-byte **HMAC-authenticated** control request carries that two-board confirmation to the peer. The receiver follows automatically, with no second local USB click. Authorization is a user declaration, **not measured RF hardware attestation**. Power authorization resets on reboot; `PROFILE BALANCED` returns to the safe default. The 22 dBm mode has been **removed**, not merely disabled.
+
+**Using Auto:** after both v1.7 nodes discover one another, open **Settings → Automatic / manual LoRa modes → Enable automatic mode** on **one browser**. Confirm both antenna/power/regulatory checks. The signed `AUTO ON` command propagates to the peer, and only the elected coordinator (lower MAC) proposes subsequent changes. It compares fresh measurements from **both** receiving radios, lowers speed proactively when signal quality approaches the sensitivity limits, and uses hysteresis/cooldown to avoid rapid oscillation. **Manual profile buttons immediately override Auto**, and an `AUTO OFF` command disables automation on both peers. The optional automation is **not enabled automatically at boot**, because +18 dBm requires an operator check; both nodes recover in manual Balanced after a restart. In Auto, *Balanced* uses nominal +18 dBm to avoid losing 8 dB transmitter margin relative to Fast; manual Balanced stays +10 dBm. Read [thresholds, failure modes and acceptance test](docs/V1_7_0_ADAPTIVE_RF.md). There is no guaranteed distance boundary in metres.
 
 A *lower* power setting may be preferable for short distances and to reduce front-end overload; the profile names reflect speed/range, not an ability to transmit faster by increasing output power.
 
@@ -59,7 +61,7 @@ idf.py -p /dev/ttyACM0 flash
 idf.py -p /dev/ttyACM1 flash
 ```
 
-**Do not run `erase-flash`** unless you intend to reset your stored shared pairing key. The firmware and web clients must all be **v1.6.1-rc.2**; the profile OFFER/AGREE frame is now 6 bytes and is incompatible with the older 5-byte profile-control format. Older v1.5 is not wire-compatible with this release's ARQ payloads.
+**Do not run `erase-flash`** unless you intend to reset your stored shared pairing key. The firmware and web clients must all be **v1.7.0-rc.1**; the profile OFFER/AGREE frame is now 6 bytes and is incompatible with the older 5-byte profile-control format. Older v1.5 is not wire-compatible with this release's ARQ payloads.
 
 ## Run the encrypted web messenger
 
@@ -69,11 +71,11 @@ From the repository root, serve **this archive's `web/`** directory:
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Open <http://127.0.0.1:8765> in a current desktop Chrome/Edge with Web Serial. Open a separate browser session/tab for each connected ESP32, grant USB access, and use the same 32-byte pairing key on both nodes. Check `READY` contains `FW=1.6.1-rc.2|ARQ=1|BULK=1|PROFILES=3|SYNC=ONE_CLICK` and, after discovery, `LINK` shows `PEER_ARQ=1`. Make a short text test before running bursts or switching modes.
+Open <http://127.0.0.1:8765> in a current desktop Chrome/Edge with Web Serial. Open a separate browser session/tab for each connected ESP32, grant USB access, and use the same 32-byte pairing key on both nodes. Check `READY` contains `FW=1.7.0-rc.1|ARQ=1|BULK=1|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1` and, after discovery, `LINK` shows `PEER_ARQ=1`. Make a short text test before running bursts or switching modes.
 
 The web application uses `web/lora_bulk.js` to stage AES-GCM ciphertext in bounded **four-command USB batches**, acknowledging each batch instead of each chunk; the ESP32 then owns RF 224-byte fragments. Normal radio ACKs mean RF reception only. The receiver browser must **decrypt and authenticate** the OGM4 envelope before issuing a delivered receipt. Read receipts depend on actual browser viewing. Missing application confirmations are shown as unconfirmed, never falsely delivered.
 
-For comparisons, run Settings → **LoRa speed test**, ideally 8 × 1024-byte encrypted probes, in Balanced first. Record profile, goodput, p50/p95 RTT, confirmed/lost, `ARQ_RETX`, `ARQ_ACKTX`, `ARQ_TIMEOUT`, `ARQ_BADMAC`. The user measured **457.4 B/s, 1.95 s median RTT, 8/8 confirmed** on v1.6.1-rc.1 Balanced. v1.6.1-rc.2 retains the exact transport settings; measure again to confirm no regression.
+For comparisons, run Settings → **LoRa speed test**, ideally 8 × 1024-byte encrypted probes, in Balanced first. Record profile, goodput, p50/p95 RTT, confirmed/lost, `ARQ_RETX`, `ARQ_ACKTX`, `ARQ_TIMEOUT`, `ARQ_BADMAC`. The user measured **457.4 B/s, 1.95 s median RTT, 8/8 confirmed** on v1.6.1-rc.1 Balanced. v1.7.0-rc.1 retains the exact transport settings; measure manual Balanced again before trying automatic operation and distinguish throughput changes caused by mode switches from ARQ regressions.
 
 ## Version history and repository layout
 
@@ -86,7 +88,8 @@ For comparisons, run Settings → **LoRa speed test**, ideally 8 × 1024-byte en
 | v1.5.0-rc.1 | Three manually coordinated modulation/range profiles and measured 1KB benchmarks; no v1.3/v1.4 published |
 | **v1.6.0-rc.1** | Integrated bounded 224B selective-repeat ARQ, bitmap ACK, USB ciphertext staging, safe 18 dBm opt-in and disabled experimental +22; field benchmark showed slowdown |
 | **v1.6.1-rc.1** | Four-line pipelined USB staging, six-frame SF7 bitmap windows, 25-ms interframe RX guard; user measured 457.4 B/s Balanced |
-| **v1.6.1-rc.2** | Restore one-browser synchronized Fast/Balanced/Max switching, signed two-board power confirmation, peer-busy response; preserve rc.1 transport unchanged |
+| **v1.6.1-rc.2** | Restore one-browser synchronized Fast/Balanced/Max switching; confirmed working by user |
+| **v1.7.0-rc.1** | Opt-in automatic Fast-first adaptation with two-way authenticated RSSI/SNR, hysteresis, emergency downgrades, leader election and signed synchronized transitions; preserve v1.6.1-rc.2 transport |
 
 `firmware/main/` holds the ESP-IDF startup, LoRa radio worker, USB and NimBLE integration. `firmware/components/offgrid_sx1278/` is the SPI driver. **`firmware/components/offgrid_arq/` is the new real firmware transport component**. `web/` contains the actual browser messenger. `android/` is preserved, **not v1.6 LoRa-compatible yet**. `firmware/tests/`, `tests/`, `docs/`, `.github/` contain host checks and instructions. `SOURCE_MANIFEST.sha256` pins tracked source integrity. The `.git` archive and portable Git bundle include the full LoRa project history.
 

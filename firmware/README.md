@@ -1,4 +1,12 @@
-# OffGrid Messenger LoRa — ESP-IDF firmware v1.6.1-rc.2
+## v1.7 automatic RF mode
+
+This release retains the v1.6.1-rc.2 USB/AES/ARQ transport unchanged. New local USB commands: `AUTO ON`, `AUTO OFF`, and existing `PROFILE LOW/BALANCED/MAX` for manual override. `AUTO ON` requires `POWER18 VERIFIED` on the initiating USB after explicit operator confirmation of **both** radio boards. Authenticated `OG_TYPE_AUTO_CTRL` and `OG_TYPE_AUTO_ACK` synchronize Auto ON/OFF; periodic HMAC-protected `OG_TYPE_AUTO_METRIC` reports supply the peer's measured RSSI/SNR. Only one MAC-elected coordinator changes profiles using the original OFFER/AGREE/verification/rollback. Radio hardware access remains in the single SX1278 task. No Wi-Fi or ESP-NOW runtime.
+
+Auto Balanced uses nominal +18 dBm (different from **manual** Balanced +10 dBm) because otherwise stepping down from Fast +18 dBm would *reduce* the end-to-end link budget. `PROFILE|ACTIVE` includes `AUTO=0/1`, `AUTO|ON`/`AUTO|PEER_ON` mark synchronized enablement; `AUTO|ERROR` records failures. Mode switch attempts require no in-flight ARQ transfer and fresh authenticated bilateral telemetry. See `../docs/V1_7_0_ADAPTIVE_RF.md`.
+
+**Do not deploy Auto before an actual ESP-IDF 6.1 build and two-board field tests.** The v1.6.1-rc.2 tag remains the confirmed rollback.
+
+# OffGrid Messenger LoRa — ESP-IDF firmware v1.7.0-rc.1
 
 The full ESP32-C3 **LoRa-only** firmware is here, including the main radio owner (`main/main.c`), SX1278 SPI driver (`components/offgrid_sx1278`), authenticated selective-repeat transport (`components/offgrid_arq`), NimBLE bridge, USB Web Serial, and tests. It is **not** a standalone C prototype.
 
@@ -19,7 +27,7 @@ idf.py -p /dev/ttyACM1 flash
 
 ## Power and radio modes
 
-Balanced SF7/BW250/+10 dBm is the boot profile. Fast SF7/BW500/+18 dBm (opt-in) and Max SF9/BW125/+18 dBm (opt-in) use the module-rated nominal 18 dBm high PA_DAC policy after verifying the radio's power supply/antenna/legal limits. For high-power profiles, the initiating user confirms BOTH devices in the v1.6.1-rc.2 browser. One USB device receives `POWER18 VERIFIED`, then `PROFILE LOW` or `PROFILE MAX`, and forwards the authenticated request containing that confirmation to the other device. The receiving ESP32 follows automatically without its own USB command. `POWER18 OFF` disables future high-power switching once already back in Balanced. There is no Experimental +22 dBm mode; it was removed as unsupported by SX1278. Original manual profile OFFER/AGREE and rollback are preserved.
+Balanced SF7/BW250/+10 dBm is the boot profile. Fast SF7/BW500/+18 dBm (opt-in) and Max SF9/BW125/+18 dBm (opt-in) use the module-rated nominal 18 dBm high PA_DAC policy after verifying the radio's power supply/antenna/legal limits. For high-power profiles, the initiating user confirms BOTH devices in the v1.7.0-rc.1 browser. One USB device receives `POWER18 VERIFIED`, then `PROFILE LOW` or `PROFILE MAX`, and forwards the authenticated request containing that confirmation to the other device. The receiving ESP32 follows automatically without its own USB command. `POWER18 OFF` disables future high-power switching once already back in Balanced. There is no Experimental +22 dBm mode; it was removed as unsupported by SX1278. Original manual profile OFFER/AGREE and rollback are preserved.
 
 ## New v1.6 bulk protocol
 
@@ -29,13 +37,13 @@ Both firmware endpoints must announce a valid HMAC-authenticated `OG_TYPE_ARQ_CA
 
 ## Development tests
 
-Run `bash firmware/tests/run-host-tests.sh` from repo root; it includes full C ARQ bridge simulations, intentionally lost frames/bitmap ACKs, web protocol tests, power checks and source checks. Optional `python3 tests/test_v15_web_smoke.py` requires Chromium and Playwright. **No full ESP-IDF build or real-board benchmark was performed in the authoring environment.** Keep v1.5 as a recovery baseline until both hardware devices pass acceptance.
+Run `bash firmware/tests/run-host-tests.sh` from repo root; it includes full C ARQ bridge simulations, intentionally lost frames/bitmap ACKs, web protocol tests, power checks and source checks. Optional `python3 tests/test_v15_web_smoke.py` requires Chromium and Playwright. **No full ESP-IDF build or real-board benchmark was performed in the authoring environment.** Keep the user-confirmed v1.6.1-rc.2 as a recovery baseline until both hardware devices pass acceptance.
 
 ## v1.6.1 measured-regression repair
 
 `BULKCHUNK` still validates every 160-byte sequence and CRC32, but `BULKSTEP` is emitted once per bounded group of four USB commands (or final partial group). The included browser now pipelines four chunk lines per write. `BULKSTAT|<id>|RF_MS=...|FRAMES=...|RETX=...|TIMEOUT=...` describes *this* transfer, not a cumulative LINK counter. Six SF7 224-byte chunks fit in one radio bitmap window for a 1-KB encrypted probe; SF9 Max stays three. A 25-ms post-TxDone guard provides receiver FIFO/HMAC/IRQ rearm time before the next packet. These are source-level optimizations requiring actual two-board validation; no throughput gain is guaranteed.
 
-**Update both boards and both browser clients.** New READY advertises `FW=1.6.1-rc.2|USBPIPE=4|WINDOW=6|PROFILES=3|SYNC=ONE_CLICK`. Do not mix the old per-chunk acknowledgment web client with this grouped acknowledgment firmware. See `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
+**Update both boards and both browser clients.** New READY advertises `FW=1.7.0-rc.1|USBPIPE=4|WINDOW=6|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1`. Do not mix the old per-chunk acknowledgment web client with this grouped acknowledgment firmware. See `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
 
 ## v1.6.1-rc.2 — one-click synchronized control only
 

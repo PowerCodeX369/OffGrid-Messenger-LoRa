@@ -1,6 +1,12 @@
-# OffGrid Messenger LoRa — browser v1.6.1-rc.2
+## v1.7 automatic Fast-first modes
 
-This is the **actual full web chat client**, not the isolated transport prototype. It retains encrypted text, browser chat history, verified delivered/read ticks, high-priority receipt batches, the three functioning manual profiles plus a disabled fourth experimental +22 dBm slot, and the LoRa speed test. Photos/voice/video remain disabled. AES-256-GCM is applied **before USB and LoRa**; radio HMAC-SHA256 verifies every new RF frame.
+Open **Settings → Automatic / manual LoRa modes** and choose Enable Auto on ONE browser after confirming both radio boards can handle nominal +18 dBm TX. The peer follows an authenticated radio control message. Auto prefers Fast, steps through Balanced and Range with RSSI/SNR hysteresis, and promotes back after sustained improvement. Manual profile buttons still work and **override** Auto. Reboot both boards to restore safe manual Balanced if they cannot communicate. Only the user-approved initiating browser starts Auto; it is deliberately not persisted across power cycles. See `../docs/V1_7_0_ADAPTIVE_RF.md`.
+
+This is a new radio-control protocol: both boards and both browsers need v1.7. Chat/receipts, history, bulk Web Serial and encrypted benchmark logic remain the original v1.6.1-rc.2 working implementation.
+
+# OffGrid Messenger LoRa — browser v1.7.0-rc.1
+
+This is the **actual full web chat client**, not the isolated transport prototype. It retains encrypted text, browser chat history, verified delivered/read ticks, high-priority receipt batches, the three functioning manual profiles and the new opt-in automatic synchronized mode, and the LoRa speed test. Photos/voice/video remain disabled. AES-256-GCM is applied **before USB and LoRa**; radio HMAC-SHA256 verifies every new RF frame.
 
 ## Launch
 
@@ -10,7 +16,7 @@ From repository root, serve **the new `web/` directory**:
 python3 -m http.server 8765 --bind 127.0.0.1 --directory web
 ```
 
-Open `http://127.0.0.1:8765` in current Chrome/Edge, connect an ESP32-C3 in each of two browser windows/sessions, and pair both with the same shared key. **Both** nodes must have v1.6 firmware (`READY` advertises `BULK=1|ARQ=1|PROFILES=3|SYNC=ONE_CLICK`). Do not serve cached v1.5 scripts, which use incompatible per-fragment USB and RF framing.
+Open `http://127.0.0.1:8765` in current Chrome/Edge, connect an ESP32-C3 in each of two browser windows/sessions, and pair both with the same shared key. **Both** nodes must have v1.7 firmware (`READY` advertises `BULK=1|ARQ=1|PROFILES=3|SYNC=ONE_CLICK`). Do not serve cached v1.5 scripts, which use incompatible per-fragment USB and RF framing.
 
 ## LoRa transmission and benchmark
 
@@ -18,12 +24,12 @@ The browser encrypts each OGM4 application envelope, stages the complete ciphert
 
 Settings → **LoRa speed test** sends encrypted random 64–1024-byte probes (4/8/12 trials), measures *confirmed application goodput* and end-to-end RTT including overhead. Compare against the measured v1.5 Fast baseline (~487.8 B/s / 2.07s median RTT) rather than theoretical PHY bitrate. Speeds are **unmeasured for v1.6**.
 
-Settings → **Manual LoRa profiles**: Balanced at boot is SF7/BW250/+10 dBm. Fast SF7/BW500/+18 dBm and Max SF9/BW125/+18 dBm require one operator on the initiating browser to confirm **both** radios have suitable antennas, supplies and legal permissions. The initiating ESP32 receives `POWER18 VERIFIED` locally and sends the authenticated profile offer; the peer follows **without a second click**. The unsupported +22 dBm selector has been removed. Firmware uses authenticated manual negotiation and timed rollback. Details: [v1.6 hardware requirements and integration](../docs/V1_6_0_ARQ_INTEGRATION.md).
+Settings → **Automatic / manual LoRa modes**: Balanced at boot is SF7/BW250/+10 dBm. Fast SF7/BW500/+18 dBm and Max SF9/BW125/+18 dBm require one operator on the initiating browser to confirm **both** radios have suitable antennas, supplies and legal permissions. The initiating ESP32 receives `POWER18 VERIFIED` locally and sends the authenticated profile offer; the peer follows **without a second click**. The unsupported +22 dBm selector has been removed. Firmware uses authenticated manual negotiation and timed rollback. Details: [v1.6 hardware requirements and integration](../docs/V1_6_0_ARQ_INTEGRATION.md).
 
 ## v1.6.1 upload and timing changes
 
-The browser sends up to four 160-byte `BULKCHUNK` lines in **one** USB write and waits for a single final group checkpoint. Each line is still sequence-validated and CRC-checked by firmware. `BULKSTAT` records authenticated radio-transfer completion time and per-transfer retries; the speed-test screen now distinguishes local USB staging, RF confirmation, and full end-to-end RTT. A lost encrypted delivered/read receipt still stays unconfirmed. Both firmware images must advertise `FW=1.6.1-rc.2` and `USBPIPE=4` to avoid old stage semantics. Hardware performance has not been measured; see `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
+The browser sends up to four 160-byte `BULKCHUNK` lines in **one** USB write and waits for a single final group checkpoint. Each line is still sequence-validated and CRC-checked by firmware. `BULKSTAT` records authenticated radio-transfer completion time and per-transfer retries; the speed-test screen now distinguishes local USB staging, RF confirmation, and full end-to-end RTT. A lost encrypted delivered/read receipt still stays unconfirmed. Both firmware images must advertise `FW=1.7.0-rc.1` and `USBPIPE=4` to avoid old stage semantics. Hardware performance has not been measured; see `../docs/V1_6_1_RC1_BOTTLENECK_FIX.md`.
 
 ## v1.6.1-rc.2 manual switching
 
-Settings → Manual LoRa profiles → Fast/Balanced/Max on **one** browser. Wait for queued messages/receipts to finish; the UI deliberately refuses a forced switch. High-power options prompt for both-board inspection, not a second USB command at the other end. Both firmware endpoints and both web clients must run v1.6.1-rc.2. See `../docs/V1_6_1_RC2_ONE_CLICK_SYNC.md`.
+Settings → Automatic / manual LoRa modes → Fast/Balanced/Max on **one** browser. Wait for queued messages/receipts to finish; the UI deliberately refuses a forced switch. High-power options prompt for both-board inspection, not a second USB command at the other end. Both firmware endpoints and both web clients must run v1.7.0-rc.1. See `../docs/V1_6_1_RC2_ONE_CLICK_SYNC.md`.

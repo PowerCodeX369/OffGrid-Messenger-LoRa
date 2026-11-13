@@ -1,5 +1,15 @@
 # Changelog
 
+## [1.7.0-rc.1] — 2026-11-13
+
+- Add **operator-enabled Fast-priority automatic link adaptation**. Coordinator chosen deterministically by device MAC; authenticated per-node RSSI/SNR and recent ARQ retry/CRC reports establish link conditions in both directions. Fixed metres are not used.
+- Add HMAC-authenticated AUTO control/ACK/quality frames, bounded retries, replay-id checks, stale-metric protection and activity-aware reporting. Mode changes reuse the v1.6.1-rc.2 signed one-click OFFER/AGREE and timed verification/rollback.
+- Add per-profile RSSI/SNR hysteresis, two-sample downgrade, four-sample upgrade, 45-second nominal cooldown and emergency downgrade for sharply failing links. Operator may override Auto with any manual profile. Reboot remains manual Balanced.
+- **Safety:** nominal +18 dBm requires explicit two-board confirmation. Auto Balanced uses nominal +18 dBm for correct link-budget progression; manual Balanced remains +10 dBm. Unsupported +22 dBm remains absent.
+- **No ARQ rewrite:** keep the v1.6.1-rc.2 radio driver, six-frame window, AES-256-GCM/receipt protocol, USB bulk and Android files identical; add policy, packet and Chromium UI tests.
+- **Qualification:** pure C/JS host suite and UI tests passed, but complete ESP-IDF 6.1 build, live two-radio automatic switch, power/current and field-range tests are pending. Previous user-confirmed v1.6.1-rc.2 is the rollback. See `docs/V1_7_0_ADAPTIVE_RF.md`.
+
+
 ## [1.6.1-rc.2] — 2026-11-13
 
 **Rebuild directly from the last measured working v1.6.1-rc.1 transport. Not based on v1.6.2 or v1.6.3.**
