@@ -76,11 +76,16 @@ static uint8_t pair_key[32];
 static bool key_present = false;
 static QueueHandle_t commands;
 static bool usb_irq_rx = false;
+/* This is a local USB activity hint, not a new RF protocol. Auto profile
+ * negotiation still requires authenticated OFFER/AGREE from BOTH nodes.
+ * Expiration guards against a crashed/disconnected web client. */
+static int64_t media_active_until_ms;
+
 static const uint8_t KDF_CONTEXT[] = "OffGrid-LoRa-HMAC-v1";
 
 typedef enum { CMD_DATA=1, CMD_URGENT, CMD_APPACK, CMD_READ, CMD_STATUS,
                CMD_KEY, CMD_PROFILE, CMD_BULK_BEGIN, CMD_BULK_CHUNK,
-               CMD_BULK_END, CMD_HIGH_PA_ON, CMD_HIGH_PA_OFF, CMD_AUTO_ON, CMD_AUTO_OFF } og_cmd_type_t;
+               CMD_BULK_END, CMD_HIGH_PA_ON, CMD_HIGH_PA_OFF, CMD_AUTO_ON, CMD_AUTO_OFF, CMD_MEDIA_ON, CMD_MEDIA_OFF } og_cmd_type_t;
 typedef struct {
     og_cmd_type_t type;
     uint8_t mac[6];
@@ -566,6 +571,7 @@ static void auto_command(bool enable){
 }
 static void auto_service(void){
     int64_t now=millis();
+    if(media_active_until_ms && now>=media_active_until_ms)media_active_until_ms=0;
     if(auto_ctrl_pending && now>=auto_ctrl_retry_at &&
        profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
         if(auto_ctrl_retries>=6){
@@ -631,7 +637,7 @@ static void auto_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.7.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.1|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -903,9 +909,34 @@ static void queue_data(const og_command_t *c) {
     }
 }
 static void process_command(const og_command_t *c) {
-    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");auto_report(auto_enabled?"ON":"OFF");return;}
+    if(c->type==CMD_STATUS){show_ready("STATUS");show_link();profile_report(profile_state.phase==OG_PROFILE_IDLE?"ACTIVE":"TRANSITION");auto_report(auto_enabled?"ON":"OFF");output("MEDIA|STATUS|ACTIVE=%u\n",(unsigned)(media_active_until_ms>millis()));return;}
     if(c->type==CMD_PROFILE){profile_start_offer(c->profile_target,c->force_profile,false);return;}
     if(c->type==CMD_AUTO_ON || c->type==CMD_AUTO_OFF){auto_command(c->type==CMD_AUTO_ON);return;}
+    if(c->type==CMD_MEDIA_OFF){
+        media_active_until_ms=0;
+        output("MEDIA|OFF|PROFILE=%s\n",og_mode_name(profile_state.current));return;
+    }
+    if(c->type==CMD_MEDIA_ON){
+        const int64_t now=millis();
+        media_active_until_ms=now+10*60*1000;
+        /* AUTO is explicit opt-in. Manual mode is NEVER silently overridden.
+         * Boost only when BOTH authenticated receivers report ample margin.
+         * Never force Fast on a weak link: the same signed auto mode handles
+         * fallback using RSSI, SNR and real packet-loss evidence. */
+        bool good=auto_enabled && auto_peer_enabled && high_pa_verified &&
+            og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
+            og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
+            auto_policy.local.rssi_dbm> -96 && auto_policy.remote.rssi_dbm> -96 &&
+            auto_policy.local.snr_q4> -12 && auto_policy.remote.snr_q4> -12 &&
+            auto_peer_recent_losses==0;
+        if(good && profile_state.current!=OG_MODE_LOW &&
+           profile_state.phase==OG_PROFILE_IDLE && !profile_has_pending()){
+            output("MEDIA|BOOST_REQUEST|LOW\n");
+            profile_start_offer(OG_MODE_LOW,false,true);
+        }else output("MEDIA|ACTIVE|MODE=%s|BOOST=%s\n",
+            og_mode_name(profile_state.current),good?"ALREADY_OR_BUSY":"SIGNAL_MARGIN_OR_AUTO_DISABLED");
+        return;
+    }
     if(c->type==CMD_HIGH_PA_ON){
         high_pa_verified=true;
         output("POWER18|ENABLED|REQUIRES_STABLE_3V3\n");return;
@@ -1185,9 +1216,9 @@ static bool queue_command(const og_command_t *c) {
 static void parse_line(const char *line,bool ble) {
     og_command_t c={0};
     if(!strcmp(line,"STATUS")){c.type=CMD_STATUS;queue_command(&c);return;}
-    if(!strcmp(line,"HELP")){output("HELP|BULKBEGIN,BULKCHUNK,BULKEND,STATUS,PROFILE LOW/BALANCED/MAX,AUTO ON/OFF,POWER18 VERIFIED,KEYGET,KEYSET,KEYSTATUS,CAPS\n");return;}
+    if(!strcmp(line,"HELP")){output("HELP|BULKBEGIN,BULKCHUNK,BULKEND,STATUS,PROFILE LOW/BALANCED/MAX,AUTO ON/OFF,MEDIA ON/OFF,POWER18 VERIFIED,KEYGET,KEYSET,KEYSTATUS,CAPS\n");return;}
     if(!strcmp(line,"CAPS") || !strcmp(line,"CAPS?")){
-        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=AUTO3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=0|VOICE=0|WIFI=0|BLE=1\n");return;
+        output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=AUTO3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=1|VOICE=1|WIFI=0|BLE=1\n");return;
     }
     if(!strcmp(line,"POWER18 VERIFIED")){
         if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
@@ -1197,6 +1228,11 @@ static void parse_line(const char *line,bool ble) {
     if(!strcmp(line,"POWER18 OFF")){
         if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
         c.type=CMD_HIGH_PA_OFF;queue_command(&c);return;
+    }
+    if(!strcmp(line,"MEDIA ON")||!strcmp(line,"MEDIA OFF")){
+        if(ble){output("MEDIA|ERROR|USB_ONLY\n");return;}
+        c.type=!strcmp(line,"MEDIA ON")?CMD_MEDIA_ON:CMD_MEDIA_OFF;
+        queue_command(&c);return;
     }
     if(!strcmp(line,"AUTO ON")||!strcmp(line,"AUTO OFF")){
         c.type=!strcmp(line,"AUTO ON")?CMD_AUTO_ON:CMD_AUTO_OFF;
