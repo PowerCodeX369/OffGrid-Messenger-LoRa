@@ -1,5 +1,13 @@
 # OffGrid Messenger LoRa
 
+**v1.8.0-rc.4 — temporary Fast mode while sending photos and voice notes, then synchronized return to the previous setting.** Built directly from the user-confirmed-working v1.8.0-rc.3 photo/voice release.
+
+**Both ESP32-C3 boards must be rebuilt/flashed with `FW=1.8.0-rc.4`, and both browsers must use `1.8.0-rc4-lora`.** This is **not a web-only hotfix**. Do not erase NVS. Manual/Auto modes, AES-256-GCM, receipt ticks, image compression, 40 KiB voice budget, UI, ARQ and SX1278 driver are retained. The browser waits for an authenticated two-node Fast-mode confirmation **before** sending a single media segment, then waits for restoration of the saved mode after transmission. Fast may be bypassed on an unsafe or busy link; no media is knowingly sent during an unconfirmed mode transition. The first media use from Balanced/Range prompts for approval that **both** boards can safely transmit at nominal +18 dBm.
+
+**Release candidate:** C/JS host tests and browser simulation have passed; real ESP-IDF 6.1 build and two-radio media Fast/restore tests have not been run here. Keep your verified rc.3 firmware/web ZIP for rollback. See [media RF handover and hardware acceptance checklist](docs/V1_8_0_RC4_SYNCHRONIZED_MEDIA_FAST.md).
+
+---
+
 **v1.8.0-rc.3 — voice-only size update (40 KiB max / 120 seconds maximum recording), layered on the v1.8.0-rc.2 web UI.**
 
 **No reflash:** Both ESP32s remain on `FW=1.8.0-rc.1`. The browser voice limit, mono Opus request and voice tooltips are the only functional changes; photos, UI controls, transport, encryption, manual/Auto RF and firmware are identical to rc.2. Shorter voice clips have proportionately smaller encoded files in general, but browser Opus cannot guarantee one-minute voice at 20 KiB or two-minute continuous natural speech at 40 KiB. The byte limit is absolute and recording stops when the codec approaches it. See [voice budget note](docs/V1_8_0_RC3_VOICE_BUDGET.md).

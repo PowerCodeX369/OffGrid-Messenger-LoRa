@@ -1,3 +1,9 @@
+# Web messenger v1.8.0-rc.4 — synchronized temporary media Fast
+
+**New ESP32 firmware required on both boards (`FW=1.8.0-rc.4`)**, and both browsers must use this web directory. The photo/voice UI and audio/image codec are unchanged from rc.3. Before sending media, the browser asks (once per physical USB session) to approve the nominal +18 dBm Fast profile for BOTH boards, then waits for firmware `MEDIA|READY|MODE=LOW` after an authenticated peer switch. On completion/failure/cancel it sends `MEDIA OFF`, waits for `MEDIA|RESTORED` and returns to the saved manual/Auto profile. Unavailable Fast is explicitly bypassed on weak/busy links. Run the two-node acceptance checklist in `../docs/V1_8_0_RC4_SYNCHRONIZED_MEDIA_FAST.md`.
+
+---
+
 # Web messenger v1.8.0-rc.3 — Voice-only 40 KiB cap
 
 **Web-only update on rc.2.** Keep the existing `FW=1.8.0-rc.1` on BOTH ESP32 boards; do not flash. The browser changes are limited to the voice-note recorder, receive limits, microphone tooltips, asset cache version and voice-specific tests/docs. Photo settings, SX1278/ARQ, auto/manual radio modes, crypto, ticks and the ESP-NOW-style buttons are unchanged.

@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.0-rc.4 — synchronized temporary Fast for photo/voice (2026-11-13)
+
+- Initiating browser waits for **authenticated two-node Fast profile confirmation** before any encrypted media radio transfer; after completion/cancellation/failure it sends `MEDIA OFF` and waits for the previous profile to be restored.
+- Firmware uses existing signed OFFER/AGREE/HELLO verification/rollback for media overrides; adds a distinct `0x10` media-intent flag that does not overlap the existing `0xA5` high-power confirmation or `0x40` Auto intent. Retains both manual setting and Auto-enabled state. A busy/weak link can bypass the boost safely.
+- Restores only when radio/USB/receipt queues are idle; bounded retries and diagnostics, 10-minute stale-hint recovery. Fast requires explicit operator approval for **both** power/antenna configurations. Old firmware has no compatible session barrier: **flash both nodes**, and replace both browsers.
+- AES-GCM media codec, 48 KiB photo/40 KiB voice budgets, voice encoding, ESP-NOW-parity media UI, original ARQ/SX1278 driver, text/receipt logic, Android and Git rollback history remain unchanged. No physical or throughput claims; see `docs/V1_8_0_RC4_SYNCHRONIZED_MEDIA_FAST.md`.
+
+
+
 ## v1.8.0-rc.3 — Voice budget web-only correction (2026-11-13)
 
 - Increase encoded voice-note file cap from 20 KiB to **40 KiB** in the recorder, OGM4 codec and encrypted media receiver. A 40 KiB voice file can be split and reassembled with the existing media format; photos remain capped at 48 KiB in the browser (50 KiB protocol limit).
