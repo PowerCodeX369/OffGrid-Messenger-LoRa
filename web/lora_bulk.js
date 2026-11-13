@@ -2,7 +2,7 @@
  * The browser encrypts the whole OGM4 envelope before staging ciphertext.
  * CRC32 protects USB staging, not application secrecy/authenticity. */
 (function(root){'use strict';
- const MAX=7168,CHUNK=160,PIPELINE=4;
+ const MAX=7168,CHUNK=160,PIPELINE=8;
  const HEX=/^[0-9A-F]{16}$/;
  const TYPE=/^(BULKREADY|BULKSTEP|BULKQUEUED|BULKSENT|BULKPROGRESS|BULKCONFIRMED|BULKFAILED|BULKSTAT|RXBSTART|RXBCHUNK|RXBDONE)\|/;
  const asHex=a=>Array.from(a,b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
@@ -44,8 +44,10 @@
    };
    try{
     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');
-    /* Bounded 4-line USB write. The radio task processes each chunk in
-     * strict sequence and replies only after the final chunk of this batch.
+    /* Bounded 8-line USB write (< 3 KiB), below the firmware's 4-KiB IRQ RX buffer.
+     * The radio task processes each chunk in
+     * strict sequence and replies at four-line checkpoints. We await the
+     * checkpoint for the final line of the 8-line browser batch.
      * A failed intermediate chunk emits BULKFAILED and rejects the waiter;
      * therefore none of the intermediate integrity checks is bypassed. */
     let seq=0;

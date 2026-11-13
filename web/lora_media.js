@@ -3,7 +3,7 @@
  * Only complete media passing SHA-256 and format checks becomes a chat message.
  * No bare picture/audio is ever handed to the SX1278/USB radio transport. */
 (function(root){'use strict';
- const MAX_PHOTO=50*1024, MAX_VOICE=40*1024, SEGMENT=5800, HEADER=28, MAX_PARTS=10;
+ const MAX_PHOTO=50*1024, MAX_VOICE=40*1024, SEGMENT=7040, HEADER=28, MAX_PARTS=10;
  const codeForMime=Object.freeze({'image/webp':0,'image/png':1,'image/jpeg':2,
    'audio/webm':0,'audio/ogg':1,'audio/mp4':2});
  const imageMimes=['image/webp','image/png','image/jpeg'];
