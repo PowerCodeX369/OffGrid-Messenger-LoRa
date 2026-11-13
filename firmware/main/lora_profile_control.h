@@ -14,6 +14,7 @@
 #include "lora_modes.h"
 #define OG_PROFILE_PAYLOAD_BYTES 6u
 #define OG_PROFILE_CONFIRM_BOTH_PA 0xA5u
+#define OG_PROFILE_AUTO_FLAG 0x40u
 #define OG_PROFILE_REJECT_BUSY 0x01u
 static inline bool og_profile_mode_valid(uint8_t mode) {
     return mode==OG_MODE_LOW || mode==OG_MODE_BALANCED || mode==OG_MODE_MAX;
@@ -29,7 +30,8 @@ static inline bool og_profile_control_valid(const og_frame_t *f) {
     if(f->id!=embedded)return false;
     if(f->type==OG_TYPE_PROFILE_REJECT)return f->data[5]==OG_PROFILE_REJECT_BUSY;
     if(f->type!=OG_TYPE_PROFILE_OFFER && f->type!=OG_TYPE_PROFILE_AGREE)return false;
-    return f->data[5]==(og_profile_high_pa(f->data[0])?OG_PROFILE_CONFIRM_BOTH_PA:0u);
+    const uint8_t expected=og_profile_high_pa(f->data[0])?OG_PROFILE_CONFIRM_BOTH_PA:0u;
+    return f->data[5]==expected || f->data[5]==(uint8_t)(expected|OG_PROFILE_AUTO_FLAG);
 }
 static inline og_frame_t og_profile_control_frame(uint8_t type,uint8_t mode,
        const uint8_t sender[6],uint32_t session,uint32_t nonce) {
@@ -41,5 +43,9 @@ static inline og_frame_t og_profile_control_frame(uint8_t type,uint8_t mode,
     f.data[5]=og_profile_high_pa(mode)?OG_PROFILE_CONFIRM_BOTH_PA:0u;
     if(type==OG_TYPE_PROFILE_REJECT)f.data[5]=OG_PROFILE_REJECT_BUSY;
     return f;
+}
+static inline bool og_profile_is_auto(const og_frame_t *f) {
+    return f && (f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE) &&
+           (f->data[5]&OG_PROFILE_AUTO_FLAG)!=0;
 }
 #endif

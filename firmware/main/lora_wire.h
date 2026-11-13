@@ -25,6 +25,9 @@
 #define OG_TYPE_PROFILE_AGREE 10u
 #define OG_TYPE_ARQ_CAPS 11u
 #define OG_TYPE_PROFILE_REJECT 12u
+#define OG_TYPE_AUTO_CTRL 13u
+#define OG_TYPE_AUTO_ACK 14u
+#define OG_TYPE_AUTO_METRIC 15u
 
 /* Packed representation intentionally preserves the original OGM2 packet header.
  * Both ESP32-C3 devices use the same little-endian frame layout. */
@@ -48,7 +51,16 @@ static inline bool og_wire_valid(const og_frame_t *f, size_t n) {
         f->type != OG_TYPE_READ && f->type != OG_TYPE_HELLO &&
         f->type != OG_TYPE_RADIO_ACK &&
         f->type != OG_TYPE_PROFILE_OFFER && f->type != OG_TYPE_PROFILE_AGREE &&
-        f->type != OG_TYPE_ARQ_CAPS && f->type != OG_TYPE_PROFILE_REJECT) return false;
+        f->type != OG_TYPE_ARQ_CAPS && f->type != OG_TYPE_PROFILE_REJECT &&
+        f->type != OG_TYPE_AUTO_CTRL && f->type != OG_TYPE_AUTO_ACK &&
+        f->type != OG_TYPE_AUTO_METRIC) return false;
+    if(f->type==OG_TYPE_AUTO_CTRL || f->type==OG_TYPE_AUTO_ACK)
+        return f->length==6 && (f->data[0]==0 || f->data[0]==1) &&
+            f->data[1]==(f->data[0]?0xA5u:0u) && f->id!=0 &&
+            f->id==((uint32_t)f->data[2] | (uint32_t)f->data[3]<<8 |
+                    (uint32_t)f->data[4]<<16 | (uint32_t)f->data[5]<<24);
+    if(f->type==OG_TYPE_AUTO_METRIC)
+        return f->length==8 && f->data[5]>=1 && f->data[5]<=3 && f->data[6]<=1;
     if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 && f->data[0]==1;
     if(f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE ||
        f->type==OG_TYPE_PROFILE_REJECT)
