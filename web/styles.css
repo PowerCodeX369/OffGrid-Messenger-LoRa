@@ -387,8 +387,9 @@ body.light .notification-button.notifications-active .notification-dot{box-shado
 .message-row .message-bubble:focus-within{outline:2px solid var(--accent,#57a8e8);outline-offset:2px;}
 @media(prefers-reduced-motion:reduce){.message-row,.message-bubble{animation:none!important;transition:none!important;}}
 
-/* LoRa v1.0 explicitly does not advertise unsupported media sending. */
-#attachments, #voiceButton { display: none !important; }
+/* v1.8 photo and voice actions intentionally use the original ESP-NOW
+ * composer presentation and interaction. These controls are only disabled
+ * until USB and AES pairing are ready; never hide them via CSS. */
 
 /* LoRa v1.5 manual mode selection */
 .profile-mode-choice { border:1px solid rgba(128,160,165,.25);border-radius:10px;padding:8px 10px;margin:9px 0; }
