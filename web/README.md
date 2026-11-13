@@ -1,3 +1,9 @@
+# Web messenger v1.8.0-rc.6 — text latency fairness
+
+**Web-only update.** Keep both ESP32s on `FW=1.8.0-rc.4`. Replace the entire `web/` directory on **both browsers** with rc.6, hard-refresh, and reconnect. Small encrypted text and receipt ciphertexts (up to 160 bytes) use a single multi-command Web Serial write; the same firmware still checks USB sequence/CRC and over-air HMAC/bitmap acknowledgments. A waiting text may go out between two complete media segments, without interrupting a radio frame or changing Fast/restore. Media codec, photo/voice limits, UI and rc.5 7,040-byte media pieces are unchanged.
+
+Use **Settings → USB diagnostics → Copy diagnostics** and compare `TEXTPERF|...|LOCAL_MS=...|QUEUE_MS=...|USB_MS=...|RFWAIT_MS=...|RF_MS=...` and `TEXTRECEIPT|DELIVERED|RTT_MS=...`/`TEXTRECEIPT|READ|RTT_MS=...`. RF confirmation is not proof of application delivery. A full ESP-IDF build and hardware RTT tests were not run. Roll back to rc.5 web on both browsers if text or media regresses. See `../docs/V1_8_0_RC6_TEXT_LATENCY.md`.
+
 # Web messenger v1.8.0-rc.5 — media transfer efficiency (web-only)
 
 Keep **both radios on `FW=1.8.0-rc.4`**; update **both** browser windows to `1.8.0-rc5-lora`. The media codec now uses 7,040-byte payload segments (48 KiB photo: 7 encrypted transfer sessions rather than 9; 40 KiB voice: 6 rather than 8). The browser sends up to 8 × 160-byte USB chunks per write, below the firmware 4 KiB USB input buffer; the firmware still validates each chunk and issues its existing every-four-chunk checkpoints. No firmware change or flash is needed. The two browsers must match because media segment count/length validation changed; do not mix rc.4 and rc.5 web clients for media.

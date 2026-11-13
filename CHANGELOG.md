@@ -1,5 +1,14 @@
 # Changelog
 
+## v1.8.0-rc.6 — shorter-text latency and media queue fairness (2026-11-13)
+
+- **Web-only release on rc.5.** Keep both physical ESP32-C3 nodes running `FW=1.8.0-rc.4`; both browsers use `1.8.0-rc6-lora`. No SX1278, ARQ, authenticated control format, encryption, 48 KiB photo codec or 40 KiB voice changes.
+- **One-chunk encrypted text/receipt USB fast path:** for a ciphertext of at most 160 bytes, send firmware's already-supported `BULKBEGIN`, `BULKCHUNK`, `BULKEND` commands in one Web Serial write, then await `BULKQUEUED`. The firmware still verifies sequence, length and CRC32; `BULKFAILED` still rejects; RF bitmap ACK and encrypted delivery/read receipts remain authoritative. Longer messages/media keep rc.5's eight-line batching.
+- **Queue fairness during media:** send at most one waiting text after a full media segment has finished its authenticated bitmap-ACK transfer, before starting the next media part. Do not interrupt an RF frame, profile transition or media Fast/restore handshake. Media remains the active parent for cancel/disconnect.
+- Content-free `TEXTPERF` (LOCAL, QUEUE, USB, RFWAIT, device RF, retries/timeouts) and `TEXTRECEIPT` (authenticated delivered/read RTT) serial diagnostics help isolate delays. Log no plaintext, keys or message IDs.
+- Host C/JS, Chromium real media composer/encoder, UI parity, media transfer/restore, short USB success/error and segment-boundary scheduling tests pass. **No physical speed gain has been measured yet.** This targets the reported text delays without modifying the known-working radio firmware; revert both web folders to rc.5 if necessary.
+
+
 ## v1.8.0-rc.5 — larger media pieces, fewer browser USB checkpoints and timing visibility (2026-11-13)
 
 - **Web-only:** keep both ESP32-C3 firmware images on `FW=1.8.0-rc.4`; use web version `1.8.0-rc5-lora` on **both** browsers. The photo/voice segment length changes from 5,800 to **7,040 bytes**; encrypted bulk frames remain at or below 7,168 bytes, and the receiver still requires AES-256-GCM authentication followed by full-file SHA-256 validation.

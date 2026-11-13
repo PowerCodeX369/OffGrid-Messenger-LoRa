@@ -1,6 +1,9 @@
 # OffGrid Messenger LoRa
 
-**v1.8.0-rc.5 — WEB-ONLY MEDIA EFFICIENCY & MEASUREMENTS, on top of the working v1.8.0-rc.4 radio firmware.** Keep **both ESP32s on `FW=1.8.0-rc.4`**; install the complete rc.5 `web/` directory on **both browsers** and hard-refresh. The browser now uses 7,040-byte media segments (48 KiB photo: 7 instead of 9), 8-line USB upload batches (firmware continues to acknowledge every four), and reports `MEDIASEG` / `MEDIAPERF` timings in USB diagnostics. The encrypted media header format, radio ARQ/driver, photo/voice limits, UI, receipts and automatic Fast synchronization stay unchanged. **No physical speed gain has been measured yet.** See [web-only optimization and acceptance](docs/V1_8_0_RC5_MEDIA_EFFICIENCY.md).
+**v1.8.0-rc.6 — WEB-ONLY SHORT-TEXT LATENCY FIX, on top of the working v1.8.0-rc.4 radio firmware.**
+Short encrypted texts/receipts now stage their BEGIN/CHUNK/END over one USB write, and text sent during a long photo/voice transfer may transmit between completed media segments. The rc.5 7,040-byte media pieces and eight-line USB pipeline are preserved. Diagnostics: `TEXTPERF` and `TEXTRECEIPT`. See `docs/V1_8_0_RC6_TEXT_LATENCY.md`.
+
+**Previous rc.5 baseline — MEDIA EFFICIENCY & MEASUREMENTS.** Keep **both ESP32s on `FW=1.8.0-rc.4`**; install the complete rc.5 `web/` directory on **both browsers** and hard-refresh. The browser now uses 7,040-byte media segments (48 KiB photo: 7 instead of 9), 8-line USB upload batches (firmware continues to acknowledge every four), and reports `MEDIASEG` / `MEDIAPERF` timings in USB diagnostics. The encrypted media header format, radio ARQ/driver, photo/voice limits, UI, receipts and automatic Fast synchronization stay unchanged. **No physical speed gain has been measured yet.** See [web-only optimization and acceptance](docs/V1_8_0_RC5_MEDIA_EFFICIENCY.md).
 
 ---
 
