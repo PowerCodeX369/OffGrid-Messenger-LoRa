@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.0-rc.3 — Voice budget web-only correction (2026-11-13)
+
+- Increase encoded voice-note file cap from 20 KiB to **40 KiB** in the recorder, OGM4 codec and encrypted media receiver. A 40 KiB voice file can be split and reassembled with the existing media format; photos remain capped at 48 KiB in the browser (50 KiB protocol limit).
+- Raise recording time ceiling from 18 seconds to **120 seconds**; the first reached limit (recording duration or hard byte budget) stops capture. Use mono mic capture with echo/noise suppression and request ~8 kbps Opus; actual bytes depend on the browser's encoder and content. Short notes are not padded or transmitted at fixed 40 KiB.
+- Update microphone/tooltips, prevent stale JS in cache, add 40 KiB/40 KiB+1 boundary tests and Chromium media tests. **No firmware, RF, media transport, photo encoder, receipt or Android changes; existing rc.2 ESP-NOW-style UI retained.**
+- **Not a 2-minute quality guarantee:** 40 KiB/120 s is ~2.73 kbps including container overhead; ordinary natural-sounding Opus speech cannot be assumed at this bitrate. The app stops before overflow and never silently sends an oversized voice note.
+
+
 ## [v1.8.0-rc.2] — 2026-11-13 · **web-only media UI repair**
 
 - Restore **visible and operable ESP-NOW-parity photo and voice composer controls** on the LoRa page. Root cause: obsolete v1.0 CSS set `#attachments, #voiceButton { display:none!important }` even after v1.8 added functional media handlers. Remove that override rather than rewriting working media code.

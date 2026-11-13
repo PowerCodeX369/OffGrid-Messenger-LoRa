@@ -1,3 +1,9 @@
+# Web messenger v1.8.0-rc.3 — Voice-only 40 KiB cap
+
+**Web-only update on rc.2.** Keep the existing `FW=1.8.0-rc.1` on BOTH ESP32 boards; do not flash. The browser changes are limited to the voice-note recorder, receive limits, microphone tooltips, asset cache version and voice-specific tests/docs. Photo settings, SX1278/ARQ, auto/manual radio modes, crypto, ticks and the ESP-NOW-style buttons are unchanged.
+
+Voice notes use browser-native mono Opus when supported, with noise/echo suppression, a requested speech-oriented **8 kbps** bitrate, a maximum **40 KiB (40,960 bytes)** encoded audio file, and a **120-second** duration ceiling. Recording stops automatically when nearing the byte limit. Short notes remain small because audio is encoded on demand; it is **not padded** to 40 KiB. WebM framing, actual speech complexity and browser encoder behavior mean there is no guaranteed exact proportional size (such as 1 min = 20 KiB), and clear continuous two-minute speech cannot be promised at 40 KiB. No uploaded file exceeds the hard cap; failed final encodes are rejected rather than sending corrupt or oversized content. See `../docs/V1_8_0_RC3_VOICE_BUDGET.md`.
+
 # Web messenger v1.8.0-rc.2 — original ESP-NOW media UI restored
 
 **Web-only fix; no ESP32 reflash.** Keep firmware `FW=1.8.0-rc.1` on BOTH ESP32s. Use this entire `web/` folder on both browser sessions and hard-refresh so the updated `styles.css?v=lora180rc2` is loaded. The original ESP-NOW `+` photo-picker, microphone recording button, in-message image thumbnails/gallery and native voice-note controls now render with the same UI styling and interaction. They are disabled until the browser is connected and paired with the correct AES key.
