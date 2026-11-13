@@ -6,7 +6,7 @@ html=(root/'web/index.html').read_text()
 css=(root/'web/styles.css').read_text()
 js=(root/'web/app.js').read_text()
 assert '#attachments, #voiceButton { display: none !important; }' not in css
-assert 'lora180rc4' in html
+assert 'lora180rc5' in html
 for token in ('id="attachments"','id="photoPicker"','id="voiceButton"','id="photoViewer"','id="viewerImage"'):
     assert token in html,token
 for token in ('composer-attach','voice-button','chat-photo','voice-clip','photo-viewer','voice-played-icon'):

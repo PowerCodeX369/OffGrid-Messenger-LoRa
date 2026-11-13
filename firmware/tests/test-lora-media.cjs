@@ -7,6 +7,8 @@ async function test(kind,size,mime){
  const original=crypto.getRandomValues(new Uint8Array(size));
  const pieces=await M.split(kind,mime,original);
  assert(pieces.length>=1 && pieces.length<=10);
+ assert.equal(M.SEGMENT,7040);
+ assert.equal(pieces.length,Math.ceil(size/7040));
  const receive=new M.Reassembler(3),id=P.newId(),sender='AB:CD:EF:12:34:56';
  let result=null;
  const schedule=[...pieces.keys()].reverse();
@@ -43,7 +45,7 @@ async function test(kind,size,mime){
  await assert.rejects(()=>M.split('image','image/jpeg',new Uint8Array(51*1024)),/budget/);
  await assert.rejects(()=>M.split('voice','audio/webm',new Uint8Array(41*1024)),/budget/);
  assert.equal(M.parse(new Uint8Array(32)),null);
- const r=new M.Reassembler();const part=(await M.split('voice','audio/webm',new Uint8Array(7000)))[0];
+ const r=new M.Reassembler();const part=(await M.split('voice','audio/webm',new Uint8Array(9000)))[0];
  await r.ingest('A','0123456789ABCDEF',part,{width:500,height:0,ts:1});
  await assert.rejects(()=>r.ingest('A','0123456789ABCDEF',part,{width:501,height:0,ts:1}),/Conflicting/);
  console.log('PASS: strict media size, metadata, and codec validation');

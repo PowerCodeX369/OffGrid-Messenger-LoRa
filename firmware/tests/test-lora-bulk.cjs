@@ -42,7 +42,7 @@ const id='1234567890ABCDEF';
  assert(metrics.usbStageMs>=0 && metrics.radioWaitMs>=0);
  const actual=P.concat(...staged);
  assert.equal(expectedLen,1024);assert.equal(steps,7);
- assert.equal(writes,4);assert.equal(stageCheckpoints,2);
+ assert.equal(writes,3);assert.equal(stageCheckpoints,2);
  assert.deepEqual(actual,payload);assert.equal(crc,hex32(crc32(payload)));
  assert.equal(sent,1);assert.equal(progress,1);assert.equal(link.stats.confirmed,1);
  assert.equal(link.stats.failed,0);
@@ -66,5 +66,38 @@ const id='1234567890ABCDEF';
  await assert.rejects(()=>link.send('0000000090ABCDEF',payload,false));
  await assert.rejects(()=>link.send(id,new Uint8Array(MAX+1),false));
  link.cancel();await assert.rejects(()=>link.send(id,payload,false));
- console.log('PASS: browser USB bulk 1024-byte staging in 2 bounded 4-line windows, strict sequence/CRC, sent+bitmap confirmation');
+ // Exercise a near-maximum encrypted media part over the unchanged firmware's
+ // every-four-chunk checkpoints. Every browser write must fit the 4-KiB RX buffer.
+ const id2='1122334455667788';let other,off2=0,seq2=0,maxBatchBytes=0,writes2=0;
+ const large=Uint8Array.from({length:7120},(_,i)=>(i*31)&255);
+ const secondWrite=async batch=>{
+  writes2++;maxBatchBytes=Math.max(maxBatchBytes,new TextEncoder().encode(batch).length+1);
+  for(const line of batch.split('\n')){
+   const p=line.split(' ');
+   if(p[0]==='BULKBEGIN'){
+    assert.equal(Number(p[2]),large.length);
+    setImmediate(()=>other.onLine(`BULKREADY|${id2}`));
+   }else if(p[0]==='BULKCHUNK'){
+    assert.equal(Number(p[2]),seq2);
+    const bytes=P.unhex(p[3]);
+    assert.deepEqual(bytes,large.subarray(off2,off2+bytes.length));
+    off2+=bytes.length;const seq=seq2++;
+    if((seq+1)%4===0||off2===large.length)
+      setImmediate(()=>other.onLine(`BULKSTEP|${id2}|${seq}`));
+   }else if(p[0]==='BULKEND'){
+    assert.equal(p[2],hex32(crc32(large)));
+    setImmediate(()=>{other.onLine(`BULKQUEUED|${id2}`);
+      other.onLine(`BULKSTAT|${id2}|RF_MS=2500|FRAMES=32|RETX=0|TIMEOUT=0`);
+      other.onLine(`BULKCONFIRMED|${id2}`);});
+   }else throw Error('Unexpected bulk command');
+  }
+ };
+ other=new BulkLink(secondWrite,()=>{});
+ const bigMetrics=await other.send(id2,large,false);
+ assert.equal(off2,large.length);
+ assert.equal(seq2,Math.ceil(large.length/160));
+ assert.equal(writes2,8); // BEGIN + 6 × eight-line-or-less stage writes + END.
+ assert(maxBatchBytes<4096,maxBatchBytes);
+ assert.equal(bigMetrics.FRAMES,32);
+ console.log('PASS: 1024/7120-byte browser USB batches of up to 8 lines fit 4-KiB MCU buffer, preserve sequence/CRC and bitmap confirmation');
 })().catch(e=>{console.error(e);process.exitCode=1;});

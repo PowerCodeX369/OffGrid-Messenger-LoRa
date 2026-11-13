@@ -11,7 +11,7 @@ assert "async function transferMedia(job)" in web and 'Media.split(r.kind,r.mime
 assert "P.makeEnvelope(P.types.mediaPart" in web and 'await P.seal(secretKey,plain,tid)' in web
 assert 'await mediaReassembler.ingest' in web and 'await handleEnvelope(reconstructed,mac)' in web
 assert 'digest(assembled)' in wire and 'SHA-256' in wire and 'Reassembler' in wire
-assert 'MAX_PHOTO=50*1024, MAX_VOICE=40*1024, SEGMENT=5800' in wire
+assert 'MAX_PHOTO=50*1024, MAX_VOICE=40*1024, SEGMENT=7040' in wire
 assert 'const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000' in web
 assert 'audioBitsPerSecond:8000' in web and 'blob.size>Media.MAX_VOICE' in web
 assert "$('attachments').disabled=!ready" in web and "$('voiceButton').disabled=!ready" in web

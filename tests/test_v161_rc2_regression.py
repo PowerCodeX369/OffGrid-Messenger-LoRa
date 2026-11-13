@@ -16,13 +16,19 @@ for name in [
     'firmware/components/offgrid_sx1278/offgrid_sx1278.c',
     'firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c',
     'firmware/main/ble_bridge.c',
-    'web/lora_bulk.js',
     'web/lora_receipts.js',
     'web/lora_scheduler.js',
     'web/lora_benchmark.js',
     'web/lora_delivery.js'
 ]:
     assert new(name)==old(name),'v1.6.1 known-working data path changed: '+name
+# Only the eight-line browser USB batching constant and its explanation
+# may change; the packet format, sequence/CRC and firmware remain identical.
+import re
+before=old('web/lora_bulk.js').decode()
+after=new('web/lora_bulk.js').decode().replace('PIPELINE=8','PIPELINE=4')
+strip_comment=lambda x:re.sub(r'/\* Bounded .*?\*/','',x,flags=re.DOTALL)
+assert strip_comment(after)==strip_comment(before),'USB transport changed beyond pipeline batching'
 # The new media envelope type and stricter voice budget must be explicit;
 # no existing OGM4 encrypt/decrypt, text, or receipt behavior is rewritten.
 protocol=new('web/protocol.js').decode()
@@ -45,4 +51,4 @@ assert "writeLine('POWER18 VERIFIED')" in web and 'writeLine(`PROFILE ${mode}`)'
 assert 'PROFILE|PEER_REQUEST' in src and 'PROFILE|PEER_BUSY' in src
 assert 'OG_TYPE_PROFILE_REJECT' in src and 'OG_TYPE_AUTO_CTRL' in src and 'auto_service();' in src
 assert 'radio_hmac(bytes,plain,digest)' in src
-print('PASS: v1.6.1 ARQ/radio driver/USB stages/crypto/receipts byte-identical; auto scheduler isolated')
+print('PASS: v1.6.1 ARQ/radio driver/crypto/receipts unchanged; browser USB batch widened only; auto scheduler isolated')
