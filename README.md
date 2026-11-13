@@ -1,5 +1,9 @@
 # OffGrid Messenger LoRa
 
+**v1.8.0-rc.5 — WEB-ONLY MEDIA EFFICIENCY & MEASUREMENTS, on top of the working v1.8.0-rc.4 radio firmware.** Keep **both ESP32s on `FW=1.8.0-rc.4`**; install the complete rc.5 `web/` directory on **both browsers** and hard-refresh. The browser now uses 7,040-byte media segments (48 KiB photo: 7 instead of 9), 8-line USB upload batches (firmware continues to acknowledge every four), and reports `MEDIASEG` / `MEDIAPERF` timings in USB diagnostics. The encrypted media header format, radio ARQ/driver, photo/voice limits, UI, receipts and automatic Fast synchronization stay unchanged. **No physical speed gain has been measured yet.** See [web-only optimization and acceptance](docs/V1_8_0_RC5_MEDIA_EFFICIENCY.md).
+
+---
+
 **v1.8.0-rc.4 — temporary Fast mode while sending photos and voice notes, then synchronized return to the previous setting.** Built directly from the user-confirmed-working v1.8.0-rc.3 photo/voice release.
 
 **Both ESP32-C3 boards must be rebuilt/flashed with `FW=1.8.0-rc.4`, and both browsers must use `1.8.0-rc4-lora`.** This is **not a web-only hotfix**. Do not erase NVS. Manual/Auto modes, AES-256-GCM, receipt ticks, image compression, 40 KiB voice budget, UI, ARQ and SX1278 driver are retained. The browser waits for an authenticated two-node Fast-mode confirmation **before** sending a single media segment, then waits for restoration of the saved mode after transmission. Fast may be bypassed on an unsafe or busy link; no media is knowingly sent during an unconfirmed mode transition. The first media use from Balanced/Range prompts for approval that **both** boards can safely transmit at nominal +18 dBm.
@@ -30,7 +34,7 @@ This is a **source release candidate**. All browser C/JS/Node media tests and Ch
 |---|---|---|
 | Photos | **48 KiB** (≤49,152 bytes) | WebP preferred/JPEG fallback, quality-adaptive 1600–640 px long edge, EXIF stripped via Canvas; error rather than unreadable extreme downscale |
 | Voice notes | **40 KiB** (≤40,960 bytes) | Browser mono Opus ~8 kbps requested; early stop near 37 KiB, actual encoded file strictly capped; maximum recording duration 120 seconds if byte budget permits |
-| Large media transport | 5,800 bytes/segment; 7,168 bytes/encrypted bulk transfer | Fresh AES-256-GCM per piece, authenticated radio HMAC and six-fragment selective ARQ, whole-media SHA-256 digest, retry only unconfirmed piece |
+| Large media transport | 7,040 bytes/segment in rc.5; 7,168 bytes/encrypted bulk transfer | Fresh AES-256-GCM per piece, authenticated radio HMAC and six-fragment selective ARQ, whole-media SHA-256 digest, retry only unconfirmed piece |
 | Media-aware RF | Opt-in AUTO only | Fast priority with strong **two-way** link evidence; signed downgrade when weak, manual profile override preserved; cannot switch safely during a completely silent link |
 
 **Important audio limitation:** 120 seconds within 40 KiB = only ~2.73 kbps including metadata, below the standard Opus codec’s 6 kbps minimum specification. The browser **cannot guarantee** a natural-sounding two-minute note inside 40 KiB, nor an exact 20 KiB one-minute note. Voice size scales with real recorded audio but encoding overhead varies; the recorder stops at the 40 KiB cap. For longer natural-sounding speech the format/size budget will need a future revision.

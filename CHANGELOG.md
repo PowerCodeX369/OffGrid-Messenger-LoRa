@@ -1,5 +1,13 @@
 # Changelog
 
+## v1.8.0-rc.5 — larger media pieces, fewer browser USB checkpoints and timing visibility (2026-11-13)
+
+- **Web-only:** keep both ESP32-C3 firmware images on `FW=1.8.0-rc.4`; use web version `1.8.0-rc5-lora` on **both** browsers. The photo/voice segment length changes from 5,800 to **7,040 bytes**; encrypted bulk frames remain at or below 7,168 bytes, and the receiver still requires AES-256-GCM authentication followed by full-file SHA-256 validation.
+- **48 KiB photos use 7 browser-mediated ARQ sessions instead of 9**; **40 KiB voice uses 6 instead of 8**. Upload batches grow from 4 to **8 × 160-byte** USB lines per browser write, without changing the existing firmware's 4-line checkpoint output, sequence validation, CRC32 or 4 KiB USB receive buffer.
+- Aggregate sender-side **`MEDIAPERF`** and per-segment **`MEDIASEG`** logs report byte count, end-to-end media-worker wall duration, mode handover/restore, browser USB staging, RF confirmation wait, firmware RF stats, retries and residual app/queue time. Logs contain only sizes/times, no user media, pairing keys or message IDs.
+- The user's same-photo measurement was **85 s Balanced / 75 s Fast** for a **46.7 KiB** compressed image; that points to substantial non-PHY or retransmission overhead but cannot isolate its cause without `BULKSTAT` metrics. This candidate makes no untested speed claims and preserves a v1.8.0-rc.4 rollback.
+- Chromium media preflight, encoder and original UI checks, host C/JS regression suite, byte-identical firmware and Android, and 48/40 KiB authenticated reassembly verified. Full ESP-IDF build and physical two-board benchmark have not run here.
+
 ## v1.8.0-rc.4 — synchronized temporary Fast for photo/voice (2026-11-13)
 
 - Initiating browser waits for **authenticated two-node Fast profile confirmation** before any encrypted media radio transfer; after completion/cancellation/failure it sends `MEDIA OFF` and waits for the previous profile to be restored.

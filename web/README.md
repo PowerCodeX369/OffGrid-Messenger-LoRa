@@ -1,3 +1,11 @@
+# Web messenger v1.8.0-rc.5 — media transfer efficiency (web-only)
+
+Keep **both radios on `FW=1.8.0-rc.4`**; update **both** browser windows to `1.8.0-rc5-lora`. The media codec now uses 7,040-byte payload segments (48 KiB photo: 7 encrypted transfer sessions rather than 9; 40 KiB voice: 6 rather than 8). The browser sends up to 8 × 160-byte USB chunks per write, below the firmware 4 KiB USB input buffer; the firmware still validates each chunk and issues its existing every-four-chunk checkpoints. No firmware change or flash is needed. The two browsers must match because media segment count/length validation changed; do not mix rc.4 and rc.5 web clients for media.
+
+After sending a photo, **Settings → USB diagnostics → Copy diagnostics** includes `MEDIASEG|...` per-part timings and a final `MEDIAPERF|...` line. The latter separates Fast profile handover, USB staging, RF confirmation, overhead and restoration. See `../docs/V1_8_0_RC5_MEDIA_EFFICIENCY.md`. No physical throughput improvement is claimed from host tests.
+
+---
+
 # Web messenger v1.8.0-rc.4 — synchronized temporary media Fast
 
 **New ESP32 firmware required on both boards (`FW=1.8.0-rc.4`)**, and both browsers must use this web directory. The photo/voice UI and audio/image codec are unchanged from rc.3. Before sending media, the browser asks (once per physical USB session) to approve the nominal +18 dBm Fast profile for BOTH boards, then waits for firmware `MEDIA|READY|MODE=LOW` after an authenticated peer switch. On completion/failure/cancel it sends `MEDIA OFF`, waits for `MEDIA|RESTORED` and returns to the saved manual/Auto profile. Unavailable Fast is explicitly bypassed on weak/busy links. Run the two-node acceptance checklist in `../docs/V1_8_0_RC4_SYNCHRONIZED_MEDIA_FAST.md`.
