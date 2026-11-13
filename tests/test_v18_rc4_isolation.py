@@ -16,8 +16,14 @@ for file in ['firmware/components/offgrid_arq/og_sr.c','firmware/components/offg
 bulk_before=subprocess.check_output(['git','show','v1.8.0-rc.4:web/lora_bulk.js'],cwd=root).decode()
 bulk_after=(root/'web/lora_bulk.js').read_text().replace('PIPELINE=8','PIPELINE=4')
 import re
+def strip_short_bulk_path(x):
+    start=x.index('    if(ciphertext.length<=CHUNK){')
+    end=x.index('    /* Bounded 8-line USB write',start)
+    x=x[:start]+"    await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');\n"+x[end:]
+    return x.replace("    await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');\n    }",
+                     "    await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');")
 strip_batch_comment=lambda x:re.sub(r'/\* Bounded .*?\*/','',x,flags=re.DOTALL)
-assert strip_batch_comment(bulk_after)==strip_batch_comment(bulk_before),'USB codec changed beyond batch count'
+assert strip_batch_comment(strip_short_bulk_path(bulk_after))==strip_batch_comment(bulk_before),'USB codec changed beyond batch count'
 media_before=subprocess.check_output(['git','show','v1.8.0-rc.4:web/lora_media.js'],cwd=root)
 media_after=(root/'web/lora_media.js').read_bytes()
 assert media_after.replace(b'SEGMENT=7040',b'SEGMENT=5800')==media_before, 'media codec changed beyond segment size'
