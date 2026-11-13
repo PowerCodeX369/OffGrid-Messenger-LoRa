@@ -2,8 +2,9 @@
 /* OffGrid Messenger LoRa v1.6.0: encrypted text over SX1278 / USB Serial.
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
-const MAX_CHARS=500,MAX_PHOTO=96*1024,MAX_VOICE_MS=P.VOICE_MAX_MS,STORE='OffGridMessengerV14';
-const APP_VERSION='1.7.0-rc1-lora';
+const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=18000,STORE='OffGridMessengerV14';
+const APP_VERSION='1.8.0-rc1-lora';
+const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
 const stateRank={sending:0,queued:0,sent:1,failed:1,delivered:2,read:3};
@@ -46,6 +47,7 @@ function diagnoseUsb(){
 
 let db=null,records=[],recordMap=new Map(),photoUrls=new Map(),voiceUrls=new Map(),incoming=new Map(),recentTransfers=new Map();
 let currentVoiceRecording=null,voiceTimer=null;
+const mediaReassembler=new Media.Reassembler(4);
 let transferQueue=[],activeTransfer=null,runningTransfers=false;
 /* Photo-only selective ACK. Groups are per sender MAC and ESP32 boot-session;
  * IDs remain arbitrary (do not assume sequential or shared with other traffic). */
@@ -284,17 +286,8 @@ async function wipeStored(){const rows=await listStored();await new Promise((res
  * unacknowledged LoRa packet at a time. Receipt frames get first priority. */
 function chosenWindow(job){return 1;} /* Exactly one unacknowledged radio fragment, INCLUDING receipts. */
 
-function photoBudget(){
- if(imageMode==='lossless')return MAX_PHOTO;
- // Image preparation happens before transmission; mid-transfer signal changes
- // alter the in-flight window, never mutate already-encrypted image bytes.
- if(linkPreference==='range')return 32*1024;
- if(['lr250','lr500'].includes(linkPreference))return 32*1024;
- if(linkPreference==='auto'&&radioTelemetry.rssi!==null&&radioTelemetry.rssi< -78)return 32*1024;
- if(linkStats.mode==='weak')return 32*1024;
- if(linkPreference==='speed'||(linkStats.mode==='strong'&&radioTelemetry.rssi!==null&&radioTelemetry.rssi>=-65))return 60*1024;
- return 48*1024;
-}
+function photoBudget(){return MAX_PHOTO;}
+
 function updateLinkBadge(){
  const node=$('linkModeLabel');if(!node)return;
  const signal=radioTelemetry.rssi===null?'RSSI unknown':`${radioTelemetry.rssi} dBm`;
@@ -329,12 +322,12 @@ function refreshStatus(){
  $('connectionDescription').textContent=verified?(localMac+' · SX1278 LoRa · protocol 2'):port?(usbHandshakeIssue||'Waiting for ESP32 READY'):'Connect your ESP32-C3 over USB';
  $('nodeAddress').textContent='Node: '+(localMac||'—');
  $('connectButton').disabled=!!port;$('disconnectButton').disabled=!port;
- $('messageInput').disabled=!ready;$('attachments').disabled=true;$('voiceButton').disabled=true;
+ $('messageInput').disabled=!ready;$('attachments').disabled=!ready;$('photoPicker').disabled=!ready;$('voiceButton').disabled=!ready;
  $('messageInput').placeholder=ready?'Message (up to 500 characters)':verified?'Pair a 256-bit key to begin':'Connect ESP32 to send messages';
  $('chatSubhead').textContent=ready?'End-to-end encrypted · SX1278 LoRa':verified?'Pair a key to start encrypted chat':'Offline · connect ESP32';
  $('securityIcon').textContent=ready?'🔒':'♢';
  $('securityLabel').textContent=ready?'AES-256-GCM enabled · manage pairing':verified?'Encryption key required · set up pairing':'Connect to configure encryption';
- $('composerStatus').textContent=ready?'Encrypted text · SX1278 LoRa v1.2':verified?'Pair the same key on both browsers to begin':'Connect an ESP32 using the sidebar';
+ $('composerStatus').textContent=ready?'Encrypted text / photos / voice · LoRa v1.8':verified?'Pair the same key on both browsers to begin':'Connect an ESP32 using the sidebar';
  updateByteCount();updateLinkBadge();
 }
 function setName(name){activeContact=(name||'Nearby node').slice(0,36);$('contactSidebarName').textContent=activeContact;$('chatName').textContent=activeContact;const initial=Array.from(activeContact)[0]?.toUpperCase()||'N';$('contactAvatar').textContent=initial;$('headerAvatar').textContent=initial;updateContactAvatar();}
@@ -733,6 +726,22 @@ async function processRxBulk(mac,transferId,ciphertext){
  }
 }
 async function handleEnvelope(env,mac){
+ if(env.kind===P.types.mediaPart){
+  /* Every segment was authenticated by a distinct AES-GCM transaction.
+   * No user-visible message or application delivered receipt until the
+   * reassembled media also passes its full SHA-256 digest. */
+  const result=await mediaReassembler.ingest(mac,env.id,env.body,
+    {width:env.width,height:env.height,ts:env.ts});
+  if(!result.complete)return;
+  const code=result.kind==='image'?({'image/webp':0,'image/png':1,'image/jpeg':2})[result.mime]:
+    ({'audio/webm':0,'audio/ogg':1,'audio/mp4':2})[result.mime];
+  if(code===undefined)throw Error('Unsupported completed media codec');
+  const reconstructed={kind:result.kind==='image'?P.types.image:P.types.voice,
+    id:env.id,ts:result.metadata.ts,width:result.metadata.width,
+    height:result.metadata.height,body:P.concat(Uint8Array.of(code),result.bytes)};
+  await handleEnvelope(reconstructed,mac);
+  return;
+ }
  if(env.kind===P.types.receiptBatch){
   let items;
   try{items=globalThis.OffGridLoRaReceipts.unpack(env.body);}catch{return;}
@@ -790,7 +799,7 @@ async function handleEnvelope(env,mac){
  let r=recordMap.get(env.id);
  if(r){if(r.dir==='in'){enqueueReceipt('delivered',r.id);if(r.readSent)enqueueReceipt('read',r.id);if(r.kind==='voice'&&r.played&&r.playedSent)enqueueReceipt('played',r.id);}return;}
  if(env.kind===P.types.text){let text;try{text=P.textFrom(env.body);}catch{return;}if(countChars(text)>MAX_CHARS)return;r={id:env.id,kind:'text',dir:'in',ts:env.ts||Date.now(),text,status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
- else if(env.kind===P.types.image){if(env.body.length<2||env.body.length>MAX_PHOTO+1)return;const mime=['image/webp','image/png','image/jpeg'][env.body[0]];if(!mime||!env.width||!env.height)return;r={id:env.id,kind:'image',dir:'in',ts:env.ts||Date.now(),mime,width:env.width,height:env.height,bytes:env.body.slice(1),status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
+ else if(env.kind===P.types.image){if(env.body.length<2||env.body.length>Media.MAX_PHOTO+1)return;const mime=['image/webp','image/png','image/jpeg'][env.body[0]];if(!mime||!env.width||!env.height)return;r={id:env.id,kind:'image',dir:'in',ts:env.ts||Date.now(),mime,width:env.width,height:env.height,bytes:env.body.slice(1),status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
  else{let voice;try{voice=P.unpackVoice(env.body,env.width+env.height*65536);}catch{return;}
   r={id:env.id,kind:'voice',dir:'in',ts:env.ts||Date.now(),mime:voice.mime,durationMs:voice.durationMs,bytes:voice.bytes,status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
  peerMac=mac;
@@ -874,6 +883,7 @@ function sendReadReceipts(){
 }
 function makeJob(r){return {kind:r.kind,control:false,record:r,created:Date.now()};}
 async function sealJob(job){
+ if(job.record&&['image','voice'].includes(job.record.kind))return {media:true};
  let transferId=P.newId();
  /* ARQ packet uses the complete 64-bit transfer ID (two LE32 words). */
  while(transferId.slice(0,8)==='00000000'||transferId.slice(8)==='00000000')transferId=P.newId();
@@ -897,7 +907,7 @@ async function sealJob(job){
  const plain=P.makeEnvelope(kind,id,body,Math.floor(Date.now()/1000),width,height);
  const ciphertext=await P.seal(secretKey,plain,transferId);
  if(ciphertext.length>globalThis.OffGridLoRaBulk.MAX)
-   throw Error('Encrypted transfer exceeds LoRa ARQ limit of 7168 bytes; media remains disabled');
+   throw Error('Encrypted bulk transfer exceeds 7168 bytes');
  return {transferId,ciphertext};
 }
 async function oneFragment(frame,job,index){
@@ -945,6 +955,55 @@ function onRadio(type,session,id,extra){
 /* Full encrypted OGM4 ciphertext staged over USB once. Firmware owns the
  * 224-byte RF fragments, burst window and authenticated bitmap retransmit.
  * Never acknowledge an application message merely for USB staging. */
+/* Media reliability is layered over the unchanged v1.7 ARQ worker.
+ * A 48 KiB photo becomes up to nine independent AES-GCM bulk transfers,
+ * each with its own RF bitmap ACK, and is digest-checked at the recipient.
+ * Retry only a failed segment; the receiver deduplicates identical parts.
+ * Both ESP32s remain free to negotiate AUTO changes at segment boundaries. */
+async function transferMedia(job){
+ const r=job.record;
+ if(!r?.bytes)throw Error('No encrypted media bytes available');
+ const pieces=await Media.split(r.kind,r.mime,r.bytes),w=r.kind==='voice'?r.durationMs&0xffff:r.width,
+       h=r.kind==='voice'?Math.floor(r.durationMs/65536):r.height;
+ const start=performance.now();let retries=0;
+ if(autoMode){try{await writeLine('MEDIA ON');await wait(700);
+     const until=Date.now()+12000;while(profileTransition&&Date.now()<until)await wait(150);
+   }catch(e){console.warn('Unable to signal media session',e);}}
+ try{
+  for(let i=0;i<pieces.length;i++){
+   if(r.cancelRequested)throw Error('Media transfer paused by user; tap to retry');
+   if(!verified||!secretKey)throw Error('Disconnected; media is available to retry');
+   const part=pieces[i];let complete=false,lastError;
+   for(let attempt=0;attempt<3&&!complete;attempt++){
+    if(profileTransition){
+     const until=Date.now()+10000;
+     while(profileTransition&&Date.now()<until)await wait(150);
+     if(profileTransition)throw Error('RF mode negotiation did not finish');
+    }
+    let tid=P.newId();while(tid.slice(0,8)==='00000000'||tid.slice(8)==='00000000')tid=P.newId();
+    const plain=P.makeEnvelope(P.types.mediaPart,r.id,part,Math.floor(r.ts/1000),w,h);
+    const ciphertext=await P.seal(secretKey,plain,tid);
+    if(ciphertext.length>globalThis.OffGridLoRaBulk.MAX)throw Error('Media segment exceeds radio bulk maximum');
+    const sub={kind:'mediaPart',control:false,record:r,mediaSegment:true};
+    try{
+     await transferFragments({transferId:tid,ciphertext},sub);
+     complete=true;
+    }catch(e){
+     lastError=e;retries++;
+     if(!verified||!secretKey)break;
+     if(attempt<2)await wait(350*(attempt+1));
+    }
+   }
+   if(!complete)throw Error('Media part '+(i+1)+'/'+pieces.length+' not confirmed: '+(lastError?.message||'radio disconnected'));
+   const percent=Math.round((i+1)/pieces.length*100);
+   await setProgress(r,percent);
+  }
+  job.totalFrames=Math.ceil((r.bytes.length+pieces.length*80)/224);
+  job.mediaMetrics={durationMs:performance.now()-start,segments:pieces.length,retries};
+ }finally{
+  if(autoMode&&writer)void writeLine('MEDIA OFF').catch(()=>{});
+ }
+}
 async function transferFragments(packet,job){
  if(!bulkLink)throw Error('Bulk LoRa transport not connected');
  const started=performance.now(),frames=Math.ceil(packet.ciphertext.length/224);
@@ -952,10 +1011,10 @@ async function transferFragments(packet,job){
  job.bulkMetrics=await rfScheduler.submit(job.control?'receipt':'data',()=>bulkLink.send(
     packet.transferId,packet.ciphertext,Boolean(job.control),{
       onSent:()=>{
-        if(job.record)void setState(job.record,'sent');
+        if(job.record&&!job.mediaSegment)void setState(job.record,'sent');
       },
       onProgress:(n,count)=>{
-        if(job.record){
+        if(job.record&&!job.mediaSegment){
           const progress=Math.round(100*n/count);
           const elapsed=Math.max(.001,(performance.now()-started)/1000);
           job.record.speedKbps=packet.ciphertext.length*(n/count)/1024/elapsed;
@@ -966,7 +1025,7 @@ async function transferFragments(packet,job){
  const elapsed=Math.max(1,performance.now()-started);
  recordLinkResult(elapsed,1,['image','voice'].includes(job.kind)&&!job.control);
  if(job.kind==='probe')job.fragmentRTTs.push(elapsed);
- if(job.record && ['image','voice'].includes(job.record.kind)){
+ if(job.record && ['image','voice'].includes(job.record.kind)&&!job.mediaSegment){
     linkStats.lastKBs=job.record.bytes.length/1024/(elapsed/1000);
     updateLinkBadge();
  }
@@ -978,7 +1037,8 @@ async function runTransfers(){
    const job=transferQueue.shift();activeTransfer=job;
    try{
     const chunks=await sealJob(job);
-    await transferFragments(chunks,job);
+    if(chunks.media)await transferMedia(job);
+    else await transferFragments(chunks,job);
     if(job.control){
       const r=recordMap.get(job.targetId);if(r&&r.dir==='in'){
        if(job.kind==='read')r.readSent=true;
@@ -990,7 +1050,7 @@ async function runTransfers(){
       /* All radio fragments were authenticated by the peer transceiver.
        * Only an encrypted delivered receipt can show the double tick. */
       await setState(job.record,'sent');
-      watchDeliveryReceipt(job.record,Math.ceil(chunks.ciphertext.length/224));
+      watchDeliveryReceipt(job.record,chunks.media?(job.totalFrames||6):Math.ceil(chunks.ciphertext.length/224));
     }
    }catch(e){
     if(job.control){
@@ -1095,7 +1155,7 @@ async function requestProfileChange(mode){
  }catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
 }
 function showProfileDialog(){showDialog('Automatic + manual LoRa modes',body=>{
- body.append(el('p','','Automatic mode prioritizes Fast. As both directions weaken it steps to Balanced, then Range; it returns toward Fast after sustained improvement. Both ESP32s must run v1.7.0-rc.1. Mode changes use the proven signed one-browser handshake and rollback. There is no fixed distance threshold.'));
+ body.append(el('p','','Automatic mode prioritizes Fast. As both directions weaken it steps to Balanced, then Range; it returns toward Fast after sustained improvement. Both ESP32s must run v1.8.0-rc.1. Mode changes use the proven signed one-browser handshake and rollback. There is no fixed distance threshold.'));
  const automatic=el('button','primary-button',autoMode?'Turn automatic mode OFF':'Enable automatic mode');
  automatic.disabled=!verified||autoBusy||profileTransition;
  automatic.onclick=()=>{closeDialog();void requestAutoMode(!autoMode);};body.append(automatic);
@@ -1152,7 +1212,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.7.0-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')||!parts.includes('MEDIA=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.8.0-rc.1 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
@@ -1206,7 +1266,7 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
   readPromise=null;serialBuffer='';verified=false;port=null;writer=null;clearUsbHint();if(pendingRadio())failPendingRadio(Error('Disconnected'));if(activeTransfer?.record)void setState(activeTransfer.record,'failed','Disconnected');
  transferQueue=[];runningTransfers=false;
   if(receiptBatchTimer!==null){clearTimeout(receiptBatchTimer);receiptBatchTimer=null;}
-  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;autoBusy=false;autoMode=false;highPaVerified=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
+  receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();mediaReassembler.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;autoBusy=false;autoMode=false;highPaVerified=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
 async function sendText(){
  if(profileTransition){toast('Wait for the LoRa profile switch to finish');return;}
 const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
@@ -1225,27 +1285,28 @@ async function preparePhoto(file){if(!file||!file.type.startsWith('image/'))thro
   if(imageMode==='lossless'){
    if(originalW*originalH>20_000_000)throw Error('Lossless photo is too large. Choose High quality in Settings.');
    canvas.width=originalW;canvas.height=originalH;ctx.drawImage(bitmap,0,0);
-   const blob=await convertCanvas(canvas,'image/png');if(!blob||blob.size>MAX_PHOTO)throw Error('Lossless PNG exceeds 96 KB; try High quality mode or a smaller image. No downscaling was performed.');
+   const blob=await convertCanvas(canvas,'image/png');if(!blob||blob.size>MAX_PHOTO)throw Error('Lossless PNG exceeds 48 KiB; use High quality WebP or JPEG.');
    return {bytes:new Uint8Array(await blob.arrayBuffer()),mime:'image/png',width:originalW,height:originalH};
   }
   let candidate=null;
   const targetBytes=photoBudget();
-  for(const maxEdge of [1800,1600,1440,1280,1152,1024,900,800,700,600,520]){
+  for(const maxEdge of [1600,1440,1280,1152,1024,960,900,820,760,700,640]){
    const scale=Math.min(1,maxEdge/Math.max(originalW,originalH));const w=Math.max(1,Math.round(originalW*scale)),h=Math.max(1,Math.round(originalH*scale));
-   canvas.width=w;canvas.height=h;ctx.drawImage(bitmap,0,0,w,h);
-   for(const q of [0.91,0.88,0.85,0.82,0.79,0.76]){
+   canvas.width=w;canvas.height=h;ctx.fillStyle='#ffffff';ctx.fillRect(0,0,w,h);ctx.drawImage(bitmap,0,0,w,h);
+   for(const q of [0.91,0.87,0.83,0.79,0.75,0.71,0.67]){
     let blob=await convertCanvas(canvas,'image/webp',q);
     if(!blob||blob.type!=='image/webp')blob=await convertCanvas(canvas,'image/jpeg',q);
     if(!blob)throw Error('Cannot encode photo');
     if(blob.size<=targetBytes){candidate={bytes:new Uint8Array(await blob.arrayBuffer()),mime:blob.type,width:w,height:h};break;}
    }if(candidate)break;
   }
-  if(!candidate)throw Error(`Photo could not fit the ${Math.round(targetBytes/1024)} KB link target. Try a simpler photo, or change Link mode to Speed first.`);
+  if(!candidate)throw Error('Could not preserve enough detail within 48 KiB. Choose a less detailed photo or crop it first.');
   return candidate;
  }finally{bitmap.close?.();}
 }
-async function sendPhoto(file){throw Error('Photo transmission is scheduled for a later LoRa release.');if(!verified||!secretKey)return;toast('Preparing photo and stripping metadata…');
+async function sendPhoto(file){if(!verified||!secretKey)return;toast('Preparing photo and stripping metadata…');
  try{const photo=await preparePhoto(file);if(!verified||!secretKey)throw Error('Disconnected while preparing image');
+ if(transferQueue.length>=MAX_TEXT_QUEUE)throw Error('Media queue full');
  const r={id:P.newId(),kind:'image',dir:'out',ts:Date.now(),mime:photo.mime,width:photo.width,height:photo.height,bytes:photo.bytes,status:'sending',progress:0};
  await appendRecord(r);transferQueue.push(makeJob(r));runTransfers();toast(`Photo prepared: ${photo.width}×${photo.height}, ${formatBytes(photo.bytes.length)}. Encrypted transfer queued.`);
  }catch(e){toast('Photo not sent: '+e.message);}finally{$('photoPicker').value='';}}
@@ -1260,12 +1321,12 @@ function voiceButtonState(){
  btn.classList.toggle('recording',active);
  btn.setAttribute('aria-pressed',String(active));
  btn.setAttribute('aria-label',active?'Stop and send voice message':'Record voice message');
- btn.title=active?'Stop and send encrypted voice note':'Record encrypted voice message (up to 2 minutes)';
+ btn.title=active?'Stop and send voice note':'Record encrypted voice note (20 KiB; typically 7–12 seconds)';
  if(active){
   const elapsed=Math.min(MAX_VOICE_MS,Date.now()-currentVoiceRecording.started);
-  $('composerStatus').textContent=`🔴 Recording voice · ${Math.floor(elapsed/1000)}s / 120s · tap mic to send`;
+  $('composerStatus').textContent=`🔴 Recording voice · ${Math.floor(elapsed/1000)}s · 20 KiB maximum · tap mic to send`;
  }else if(verified&&secretKey){
-  $('composerStatus').textContent='Encrypted text · SX1278 LoRa v1.2';
+  $('composerStatus').textContent='Encrypted media · LoRa v1.8';
  }
  updatePrimaryAction();
 }
@@ -1276,7 +1337,7 @@ function stopVoiceRecording(cancel=false){
   try{v.recorder.stop();}catch(e){console.warn('Voice recorder stop:',e);}
  }
 }
-async function toggleVoiceRecording(){toast('Voice transmission is scheduled for a later LoRa release.');return;
+async function toggleVoiceRecording(){
  if(currentVoiceRecording){stopVoiceRecording();return;}
  if(!verified||!secretKey){toast('Connect and pair both ESP32s before recording.');return;}
  if(!navigator.mediaDevices?.getUserMedia||!globalThis.MediaRecorder){toast('Microphone recording requires Chromium on localhost or HTTPS.');return;}
@@ -1287,10 +1348,10 @@ async function toggleVoiceRecording(){toast('Voice transmission is scheduled for
  try{
   stream=await navigator.mediaDevices.getUserMedia({audio:{echoCancellation:true,noiseSuppression:true,autoGainControl:true},video:false});
   if(!verified||!secretKey){stream.getTracks().forEach(track=>track.stop());return;}
-  const recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:12000});
-  const v={recorder,stream,chunks:[],started:Date.now(),cancelled:false,mime};
+  const recorder=new MediaRecorder(stream,{mimeType:mime,audioBitsPerSecond:16000});
+  const v={recorder,stream,chunks:[],capturedBytes:0,started:Date.now(),cancelled:false,mime};
   currentVoiceRecording=v;
-  recorder.ondataavailable=event=>{if(event.data?.size)v.chunks.push(event.data);};
+  recorder.ondataavailable=event=>{if(event.data?.size){v.chunks.push(event.data);v.capturedBytes+=event.data.size;if(v.capturedBytes>=15*1024&&recorder.state!=='inactive')stopVoiceRecording();}};
   recorder.onerror=event=>{console.warn('MediaRecorder error',event.error);v.cancelled=true;stopVoiceRecording(true);toast('Voice recording failed.');};
   recorder.onstop=async()=>{
    const durationMs=Math.max(100,Math.min(MAX_VOICE_MS,Date.now()-v.started));
@@ -1301,18 +1362,19 @@ async function toggleVoiceRecording(){toast('Voice transmission is scheduled for
    if(v.cancelled)return;
    try{
     const blob=new Blob(v.chunks,{type:recorder.mimeType||mime});
-    if(blob.size>P.VOICE_MAX)throw Error('Recording exceeded 384 KiB. Try a shorter note.');
+    if(blob.size>Media.MAX_VOICE)throw Error('Voice note exceeded 20 KiB. Record a shorter clip; browser codec may exceed its target bitrate.');
     if(blob.size<256)throw Error('Recording is empty or too short.');
     if(!verified||!secretKey)throw Error('ESP32 disconnected; recording discarded.');
     const bytes=new Uint8Array(await blob.arrayBuffer());
     const codec=P.voiceCodecForMime(blob.type);
     if(!codec)throw Error('Unsupported audio codec');
+    if(transferQueue.length>=MAX_TEXT_QUEUE)throw Error('Media queue full');
     const r={id:P.newId(),kind:'voice',dir:'out',ts:Date.now(),mime:codec.mime,durationMs,bytes,status:'sending',progress:0};
     await appendRecord(r);transferQueue.push(makeJob(r));runTransfers();
     toast(`Encrypted voice note queued · ${Math.round(durationMs/1000)}s · ${formatBytes(bytes.length)}.`);
    }catch(error){toast('Voice not sent: '+error.message);}
   };
-  recorder.start(500);
+  recorder.start(250);
   voiceButtonState();
   voiceTimer=setInterval(()=>{
     if(currentVoiceRecording!==v)return;
@@ -1360,6 +1422,15 @@ function showMessageActions(id){
     };container.append(save);field.focus();
    });
   });
+  if(r.dir==='out'&&['image','voice'].includes(r.kind)&&r.status==='sending')
+   add('Pause media transfer',async()=>{
+     r.cancelRequested=true;
+     if(activeTransfer?.record!==r){
+       transferQueue=transferQueue.filter(j=>j.record!==r);
+       await setState(r,'failed','Paused; click message to retry');
+     }else toast('Media transfer pauses after the current encrypted segment');
+     closeDialog();
+   });
   add('Delete for me',()=>{if(confirm('Delete only from this browser?'))void deleteLocalRecord(r).catch(e=>toast(e.message));});
   if(r.dir==='out'&&!r.deleted&&verified&&['delivered','read'].includes(r.status))add('Delete for everyone',async()=>{
    if(!confirm('Delete this message on updated OffGrid clients too? An offline or older client may keep its existing copy.'))return;
@@ -1371,7 +1442,7 @@ function showMessageActions(id){
   body.append(actions);
  });
 }
-function retryMessage(id){const r=recordMap.get(id);if(!r||r.dir!=='out'||r.status!=='failed'||!verified||!secretKey)return;r.status='sending';r.progress=0;r.error='';updateBubble(r);void storeStatus(r);transferQueue.push(makeJob(r));runTransfers();}
+function retryMessage(id){const r=recordMap.get(id);if(!r||r.dir!=='out'||r.status!=='failed'||!verified||!secretKey)return;r.status='sending';r.progress=0;r.error='';r.cancelRequested=false;updateBubble(r);void storeStatus(r);transferQueue.push(makeJob(r));runTransfers();}
 function showDialog(title,render){$('modalTitle').textContent=title;const content=$('modalBody');content.replaceChildren();render(content);$('modalBackdrop').classList.remove('hidden');}
 function closeDialog(){$('modalBackdrop').classList.add('hidden');}
 function el(tag,cl='',text=''){const out=document.createElement(tag);if(cl)out.className=cl;out.textContent=text;return out;}
@@ -1425,20 +1496,20 @@ function showRename(){showDialog('Contact name',body=>{body.append(el('p','','Th
 async function clearHistory(){if(!verified||!secretKey)return;if(runningTransfers||pendingRadio()||transferQueue.length){toast('Finish active transfers before clearing history.');return;}if(!confirm('Delete encrypted chat history for this ESP32 from this browser? This cannot be undone.'))return;
  await wipeStored();records=[];recordMap.clear();revokePhotos();renderHistory();toast('Local chat history cleared.');closeDialog();}
 function showInfo(){showDialog('LoRa chat information',body=>{
- const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.7.0-rc.1'],
+ const rows=[['Your ESP32',localMac||'Disconnected'],['Firmware','OffGrid Messenger LoRa v1.8.0-rc.1'],
   ['Protocol','Authenticated SX1278 frames + AES-256-GCM (OGM4)'],
   ['Frequency','433 MHz (subject to applicable local RF rules)'],
   ['Profile',`${autoMode?'Automatic · ':'Manual · '}${profileLabels[currentProfile]}: SF${profileRadio.sf} / ${profileRadio.bw/1000} kHz / CR 4/5 / TX ${profileRadio.power} dBm`],
   ['Peer',radioTelemetry.peer],
   ['Radio RSSI',radioTelemetry.rssi===null?'Unknown':radioTelemetry.rssi+' dBm'],
   ['Security',secretKey?'AES-256-GCM key loaded from ESP32 NVS':'Not paired'],
-  ['Photos / voice','Scheduled for later LoRa releases'],
+  ['Photos / voice','Encrypted ≤48 KiB photos / ≤20 KiB short Opus voice notes'],
   ['History','Browser IndexedDB encrypted using your pairing key']];
  for(const [title,value] of rows){const row=el('div','info-line');row.append(el('span','',title),el('strong','',value));body.append(row);}
  body.append(el('p','','Single gray tick = SX1278 TxDone for all fragments. Double gray = authenticated encrypted delivery receipt. Double blue = authenticated read receipt. A timeout means unconfirmed, not definitely undelivered.'));
  });}
 function showSettings(){showDialog('LoRa settings',body=>{
- body.append(el('p','','OffGrid Messenger LoRa v1.7: authenticated automatic RF adaptation prefers Fast and uses recent two-way RSSI/SNR; manual mode selection remains available. No Wi-Fi or ESP-NOW. Photos/voice remain disabled.'));
+ body.append(el('p','','OffGrid Messenger LoRa v1.8: compressed photos and short Opus voice notes are encrypted and segmented, with limited retries. Auto RF may choose Fast when both directions have safe signal margin and fall back based on losses. Manual modes stay in control. Two-minute natural-sounding speech cannot fit in 20 KiB.'));
  const buttons=el('div','settings-actions');
  for(const [name,action] of [['Rename contact',showRename],['Node pairing key',showPairing],
    ['USB diagnostics',diagnoseUsb],['Automatic / manual LoRa modes',showProfileDialog],['LoRa speed test',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){
@@ -1477,4 +1548,4 @@ document.addEventListener('visibilitychange',()=>{sendReadReceipts();updateNotif
 window.addEventListener('beforeunload',()=>{stopVoiceRecording(true);revokePhotos();});
 setInterval(pruneIncoming,45000);
 (async()=>{try{db=await openDb();}catch(e){toast('IndexedDB unavailable. Encrypted storage cannot work: '+e.message);}refreshStatus();updateUnreadBadge();updateNotificationButton();})();
-console.info('OffGrid Phase 2.4.1 web chat controls · based on 1.6.1 — native desktop alerts, local unread badges, calmer UI, and preserved encrypted text/photo/voice protocols.');
+console.info('OffGrid Messenger LoRa v1.8: encrypted text, compressed segmented photos and Opus voice, adaptive RF.');

@@ -6,15 +6,16 @@
   <meta name="theme-color" content="#101b21">
   <title>OffGrid Messenger LoRa</title>
   <link rel="icon" href="logo.svg" type="image/svg+xml">
-  <link rel="stylesheet" href="styles.css?v=lora170rc1">
-  <script src="protocol.js?v=lora170rc1" defer></script>
-  <script src="adaptive.js?v=lora170rc1" defer></script>
-  <script src="lora_delivery.js?v=lora170rc1" defer></script>
-  <script src="lora_scheduler.js?v=lora170rc1" defer></script>
-  <script src="lora_bulk.js?v=lora170rc1" defer></script>
-  <script src="lora_benchmark.js?v=lora170rc1" defer></script>
-  <script src="lora_receipts.js?v=lora170rc1" defer></script>
-  <script src="app.js?v=lora170rc1" defer></script>
+  <link rel="stylesheet" href="styles.css?v=lora180rc1">
+  <script src="protocol.js?v=lora180rc1" defer></script>
+  <script src="adaptive.js?v=lora180rc1" defer></script>
+  <script src="lora_delivery.js?v=lora180rc1" defer></script>
+  <script src="lora_scheduler.js?v=lora180rc1" defer></script>
+  <script src="lora_bulk.js?v=lora180rc1" defer></script>
+  <script src="lora_benchmark.js?v=lora180rc1" defer></script>
+  <script src="lora_media.js?v=lora180rc1" defer></script>
+  <script src="lora_receipts.js?v=lora180rc1" defer></script>
+  <script src="app.js?v=lora180rc1" defer></script>
 </head>
 <body>
 <div class="app" id="app">
@@ -70,7 +71,7 @@
         <div class="intro" id="introCard">
           <img class="intro-logo" src="logo.svg" alt="OffGrid Messenger logo">
           <strong>Off-grid messaging over ESP32-C3 + SX1278</strong>
-          <p>Encrypted text over SX1278 LoRa. Photos and voice arrive in later releases. Pair both browsers with the same 256-bit key before sending.</p>
+          <p>Encrypted text over SX1278 LoRa. Encrypted photos and short, compressed voice notes are supported in v1.8. Pair both browsers with the same 256-bit key before sending.</p>
           <span>Connect both boards to begin</span>
         </div>
         <div class="day-divider"><span>Today</span></div>
@@ -78,10 +79,10 @@
       </div>
       <div class="send-panel">
         <div class="composer" id="composer">
-          <button class="icon-button composer-attach" id="attachments" title="Photos coming in a later release" aria-label="Photos coming in a later release" disabled>＋</button>
+          <button class="icon-button composer-attach" id="attachments" title="Send compressed photo (max 48 KiB)" aria-label="Attach photo" disabled>＋</button>
           <input type="file" id="photoPicker" accept="image/*" hidden disabled>
           <textarea id="messageInput" rows="1" maxlength="2000" placeholder="Connect ESP32 to send messages" disabled aria-label="Message"></textarea>
-          <button class="icon-button voice-button" id="voiceButton" type="button" title="Voice coming in a later release" aria-label="Record voice message" aria-pressed="false" disabled>
+          <button class="icon-button voice-button" id="voiceButton" type="button" title="Record compressed voice note (20 KiB maximum)" aria-label="Record voice message" aria-pressed="false" disabled>
             <svg viewBox="0 0 24 24" width="19" height="19" fill="none" stroke="currentColor" stroke-width="1.9" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="9" y="2" width="6" height="12" rx="3"/><path d="M5 10a7 7 0 0 0 14 0M12 17v5M8 22h8"/></svg>
           </button>
           <span id="byteCount" class="byte-count">0/500</span>
