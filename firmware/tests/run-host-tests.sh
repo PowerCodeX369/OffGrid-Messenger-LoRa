@@ -73,3 +73,4 @@ python3 tests/test_v17_adaptive.py
 if command -v clang >/dev/null 2>&1; then sh firmware/tests/run-syntax-checks.sh; fi
 
 python3 tests/test_v18_media.py
+python3 tests/test_v18_ui_source.py
