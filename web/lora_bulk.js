@@ -43,7 +43,18 @@
     }
    };
    try{
-    await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');
+    if(ciphertext.length<=CHUNK){
+     /* Short encrypted text/receipt: the rc.4 firmware queues USB commands
+      * sequentially. Send BEGIN, CHUNK and END together and wait for the
+      * final integrity-checked BULKQUEUED event, saving two USB turnarounds.
+      * BULKFAILED at ANY stage still rejects the pending waiter. No RF or
+      * encryption behavior changes. The whole write is < 512 bytes. */
+     const crc=hex32(crc32(ciphertext));
+     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}\n`+
+       `BULKCHUNK ${id} 0 ${asHex(ciphertext)}\n`+
+       `BULKEND ${id} ${crc}`,'BULKQUEUED');
+    }else{
+     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');
     /* Bounded 8-line USB write (< 3 KiB), below the firmware's 4-KiB IRQ RX buffer.
      * The radio task processes each chunk in
      * strict sequence and replies at four-line checkpoints. We await the
@@ -59,6 +70,7 @@
      await sendStage(lines.join('\n'),'BULKSTEP',seq-1);
     }
     await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');
+    }
     a.stagedAt=performance.now();
     /* Timeout scales with Max/Range airtime and 32 possible fragments. */
     const ms=22000+Math.ceil(ciphertext.length/224)*4500;

@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.8.0-rc5-lora';
+const APP_VERSION='1.8.0-rc6-lora';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -558,7 +558,12 @@ async function setState(r,status,error=''){
  }
  const prior=r.status||'sending';if(prior==='read'&&status!=='read')return;if(prior==='delivered'&&status==='failed')return;
  if(status!=='failed'&&(stateRank[status]??0)<(stateRank[prior]??0))return;
- r.status=status;r.error=error;r.progress=status==='sending'?r.progress:0;updateBubble(r);try{await storeStatus(r);}catch(e){console.warn('Status save failed',e);}
+ r.status=status;r.error=error;r.progress=status==='sending'?r.progress:0;updateBubble(r);
+ if(r.dir==='out'&&r.kind==='text'&&r.textClickedAt&&prior!==status&&
+    (status==='delivered'||status==='read')){
+  logUsb(`TEXTRECEIPT|${status.toUpperCase()}|RTT_MS=${Math.round(performance.now()-r.textClickedAt)}`);
+ }
+ try{await storeStatus(r);}catch(e){console.warn('Status save failed',e);}
 }
 async function setProgress(r,pct){if(!r||['sent','delivered','read','failed'].includes(r.status))return;r.status='sending';r.progress=Math.max(0,Math.min(100,pct));updateBubble(r);}
 /* Radio TxDone is ONE gray tick; only an authenticated OGM4 delivered
@@ -882,7 +887,7 @@ function sendReadReceipts(){
  }
  updateUnreadBadge();
 }
-function makeJob(r){return {kind:r.kind,control:false,record:r,created:Date.now()};}
+function makeJob(r){return {kind:r.kind,control:false,record:r,created:Date.now(),createdMono:performance.now()};}
 async function sealJob(job){
  if(job.record&&['image','voice'].includes(job.record.kind))return {media:true};
  let transferId=P.newId();
@@ -1082,6 +1087,10 @@ async function transferMedia(job){
    if(!complete)throw Error('Media part '+(i+1)+'/'+pieces.length+' not confirmed: '+(lastError?.message||'radio disconnected'));
    const percent=Math.round((i+1)/pieces.length*100);
    await setProgress(r,percent);
+   /* A long image may take a minute. After this authenticated media segment
+    * finishes, let ONE waiting text message through without interrupting an
+    * RF frame, a bitmap ACK, or the signed media Fast session. */
+   if(!profileTransition)await sendOneQueuedTextBetweenMediaSegments();
   }
   job.totalFrames=Math.ceil((r.bytes.length+pieces.length*80)/224);
  }catch(e){outcome='FAILED';throw e;}
@@ -1125,12 +1134,41 @@ async function transferFragments(packet,job){
     updateLinkBadge();
  }
 }
+/* Keep short texts responsive during photo/voice uploads. Uses the exact
+ * same encrypt -> bulk ARQ -> authenticated-receipt rules as ordinary text;
+ * only the queue turn order changes, at a COMPLETED media segment boundary. */
+async function sendTextJob(job){
+ const r=job.record;
+ const started=performance.now();
+ const queuedMs=Math.max(0,started-(job.createdMono||started));
+ try{
+  const packet=await sealJob(job);
+  await transferFragments(packet,job);
+  await setState(r,'sent');
+  watchDeliveryReceipt(r,Math.ceil(packet.ciphertext.length/224));
+  const m=job.bulkMetrics||{};
+  logUsb(`TEXTPERF|CONFIRMED_RF|LOCAL_MS=${Math.round(r.localSaveMs||0)}|QUEUE_MS=${Math.round(queuedMs)}|USB_MS=${Math.round(m.usbStageMs||0)}|RFWAIT_MS=${Math.round(m.radioWaitMs||0)}|RF_MS=${Math.round(m.RF_MS||0)}|FRAMES=${m.FRAMES??'?'}|RETX=${m.RETX??'?'}|TIMEOUT=${m.TIMEOUT??'?'}`);
+ }catch(e){
+  await setState(r,'failed',e.message);
+  toast('Transfer failed. Click its bubble to retry.');
+ }
+}
+async function sendOneQueuedTextBetweenMediaSegments(){
+ if(!verified||!secretKey||!bulkLink||profileTransition)return;
+ const i=transferQueue.findIndex(j=>j.kind==='text'&&!j.control&&j.record);
+ if(i<0)return;
+ const [job]=transferQueue.splice(i,1);
+ /* Leave activeTransfer pointing to the media parent: disconnect/cancel must
+  * still identify that transfer until its restore handshake finishes. */
+ await sendTextJob(job);
+}
 async function runTransfers(){
  if(runningTransfers||!verified||!secretKey)return;runningTransfers=true;
  try{
   while(verified&&secretKey&&transferQueue.length){
    const job=transferQueue.shift();activeTransfer=job;
    try{
+    if(job.kind==='text'&&!job.control){await sendTextJob(job);continue;}
     const chunks=await sealJob(job);
     if(chunks.media)await transferMedia(job);
     else await transferFragments(chunks,job);
@@ -1368,7 +1406,9 @@ async function sendText(){
  if(profileTransition){toast('Wait for the LoRa profile switch to finish');return;}
 const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
  if(countChars(text)>MAX_CHARS){toast('Maximum 500 characters per text message.');return;}
- const r={id:P.newId(),kind:'text',dir:'out',ts:Date.now(),text,status:'sending',progress:0};await appendRecord(r);input.value='';updateByteCount();
+ const r={id:P.newId(),kind:'text',dir:'out',ts:Date.now(),text,status:'sending',progress:0,textClickedAt:performance.now()};
+ await appendRecord(r);r.localSaveMs=performance.now()-r.textClickedAt;
+ input.value='';updateByteCount();
  if(transferQueue.length>=MAX_TEXT_QUEUE){await setState(r,'failed','Local text queue is full; retry once it drains');toast('LoRa text queue full; let pending messages finish');return;}
  transferQueue.push(makeJob(r));void runTransfers();}
 function updatePrimaryAction(){const composer=$('composer'),input=$('messageInput'),voice=$('voiceButton'),send=$('sendButton');if(!composer||!input||!voice||!send)return;const hasText=!!input.value.trim();const recording=!!currentVoiceRecording;composer.classList.toggle('show-send',!recording&&hasText);composer.classList.toggle('show-voice',recording||!hasText);composer.classList.toggle('recording-mode',recording);voice.setAttribute('aria-hidden',(!recording&&hasText)?'true':'false');send.setAttribute('aria-hidden',(recording||!hasText)?'true':'false');}
