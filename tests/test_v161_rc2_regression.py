@@ -28,7 +28,7 @@ for name in [
 protocol=new('web/protocol.js').decode()
 old_protocol=old('web/protocol.js').decode()
 assert protocol.replace('receiptBatch:11,mediaPart:12','receiptBatch:11').replace(
-    'const VOICE_MAX=20*1024,VOICE_MAX_MS=120000;',
+    'const VOICE_MAX=40*1024,VOICE_MAX_MS=120000;',
     'const VOICE_MAX=384*1024,VOICE_MAX_MS=120000;')==old_protocol
 src=new('firmware/main/main.c').decode()
 baseline=old('firmware/main/main.c').decode()

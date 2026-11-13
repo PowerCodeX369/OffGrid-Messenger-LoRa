@@ -59,6 +59,7 @@ node --check web/app.js
 node --check web/protocol.js
 node --check web/lora_media.js
 node firmware/tests/test-lora-media.cjs
+node firmware/tests/test-lora-voice-40k.cjs
 node firmware/tests/test-protocol.cjs
 node firmware/tests/test-adaptive.cjs
 node firmware/tests/test-diagnostic-protocol.cjs

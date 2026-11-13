@@ -45,14 +45,14 @@ with sync_playwright() as p:
         audio=page.evaluate('''async()=>{
           const audio=new AudioContext(),source=audio.createOscillator(),dest=audio.createMediaStreamDestination();
           source.frequency.value=430;source.connect(dest);source.start();
-          const rec=new MediaRecorder(dest.stream,{mimeType:'audio/webm;codecs=opus',audioBitsPerSecond:16000});
+          const rec=new MediaRecorder(dest.stream,{mimeType:'audio/webm;codecs=opus',audioBitsPerSecond:8000});
           let chunks=[];rec.ondataavailable=e=>{if(e.data.size)chunks.push(e.data)};
           const done=new Promise(resolve=>rec.onstop=resolve);
           rec.start(250);await new Promise(resolve=>setTimeout(resolve,1600));rec.stop();await done;
           source.stop();await audio.close();const blob=new Blob(chunks,{type:rec.mimeType});
           return {size:blob.size,type:blob.type};
         }''')
-        assert 256<audio['size']<=20*1024,audio
+        assert 256<audio['size']<=40*1024,audio
         print('PASS: Chromium 1.6-second synthetic Opus sample',audio)
     else: print('SKIP: Chromium Opus MediaRecorder unsupported')
     browser.close()

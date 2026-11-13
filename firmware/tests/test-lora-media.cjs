@@ -39,9 +39,9 @@ async function test(kind,size,mime){
 }
 (async()=>{
  await test('image',48*1024,'image/webp');
- await test('voice',20*1024,'audio/webm');
+ await test('voice',40*1024,'audio/webm');
  await assert.rejects(()=>M.split('image','image/jpeg',new Uint8Array(51*1024)),/budget/);
- await assert.rejects(()=>M.split('voice','audio/webm',new Uint8Array(21*1024)),/budget/);
+ await assert.rejects(()=>M.split('voice','audio/webm',new Uint8Array(41*1024)),/budget/);
  assert.equal(M.parse(new Uint8Array(32)),null);
  const r=new M.Reassembler();const part=(await M.split('voice','audio/webm',new Uint8Array(7000)))[0];
  await r.ingest('A','0123456789ABCDEF',part,{width:500,height:0,ts:1});
