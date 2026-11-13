@@ -1,5 +1,12 @@
 # OffGrid Messenger LoRa
 
+**v1.10.0-rc.1 — WEB-ONLY SECURITY/STABILITY HARDENING on the user-confirmed-working rc.6 release.**
+
+The browser now avoids concurrent duplicate decryption/application handling of the same authenticated radio transfer, while failed authentication remains retryable. A bounded receive guard, 100,000-operation replay stress test, 40,000 mutated-frame/parser cases, and Chromium duplicate-delivery tests are included. **Keep both ESP32s on FW=1.8.0-rc.4** and deploy the new complete `web/` folder to both clients; no flashing. Existing text/media code, 48 KiB photos, 40 KiB voice, manual/Auto modes and media Fast handover are preserved. This is not a persistent RF control-frame anti-replay implementation or a security certification. See [v1.10 limitations and acceptance](docs/V1_10_0_SECURITY_STABILITY.md).
+
+---
+
+
 **v1.8.0-rc.6 — WEB-ONLY SHORT-TEXT LATENCY FIX, on top of the working v1.8.0-rc.4 radio firmware.**
 Short encrypted texts/receipts now stage their BEGIN/CHUNK/END over one USB write, and text sent during a long photo/voice transfer may transmit between completed media segments. The rc.5 7,040-byte media pieces and eight-line USB pipeline are preserved. Diagnostics: `TEXTPERF` and `TEXTRECEIPT`. See `docs/V1_8_0_RC6_TEXT_LATENCY.md`.
 

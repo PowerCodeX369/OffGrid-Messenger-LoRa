@@ -1,6 +1,24 @@
+# v1.10 browser receive hardening
+
+The browser now serializes authenticated work by peer/transfer ID before
+performing asynchronous AES-GCM decryption and IndexedDB writes. Concurrent
+copies of a received transfer are not processed twice. Legacy radio packet
+IDs that arrive during validation receive an APPACK only **after successful
+authenticated application handling**. Bad tags and invalid envelopes cannot
+poison the success cache; short-term replay memory is bounded and cleared
+on disconnect. These properties are covered by deterministic stress and
+Chromium integration tests.
+
+**This is not persistent RF control-frame anti-replay across firmware reboots.**
+The signed mode-switch/control protocol and its existing session nonce checks
+are unchanged. The pairing key remains exportable to a trusted local USB
+operator; key rotation between NVS and IndexedDB is not atomic across power
+loss. No independent security audit has been completed. See
+`docs/V1_10_0_SECURITY_STABILITY.md` for explicit remaining work.
+
 # v1.8 security note — media transport
 
-Image and voice contents are **not plaintext on USB or RF**: files are compressed locally, then segmented into 5,800-byte chunks with a whole-file truncated SHA-256 digest; every segment is independently AES-256-GCM encrypted with a fresh nonce/transfer ID, and the existing LoRa frame HMAC is retained. Partial files never cause delivery/read receipts; only complete verified media is displayed and stored encrypted locally. Untrusted image/audio decoders remain within the browser sandbox. Receiver keeps at most four partial media files in RAM and expires them after 20 minutes (this is not persistent resume). `MEDIA ON` is permitted only via physical local USB and cannot bypass the user-enabled AUTO setting or authenticated profile handshake.
+Image and voice contents are **not plaintext on USB or RF**: files are compressed locally, then segmented into 7,040-byte chunks with a whole-file truncated SHA-256 digest; every segment is independently AES-256-GCM encrypted with a fresh nonce/transfer ID, and the existing LoRa frame HMAC is retained. Partial files never cause delivery/read receipts; only complete verified media is displayed and stored encrypted locally. Untrusted image/audio decoders remain within the browser sandbox. Receiver keeps at most four partial media files in RAM and expires them after 20 minutes (this is not persistent resume). `MEDIA ON` is permitted only via physical local USB and cannot bypass the user-enabled AUTO setting or authenticated profile handshake.
 
 # OffGrid Messenger LoRa — security model
 

@@ -1,5 +1,15 @@
 # Changelog
 
+## v1.10.0-rc.1 — security / stability receive hardening (2026-11-13)
+
+- Build directly on the user-confirmed working **v1.8.0-rc.6** source and preserve the original ESP32 `FW=1.8.0-rc.4` runtime. **Web-only:** two browsers must use `1.10.0-rc1-lora`; do not flash the radios.
+- Prevent overlapping authenticated decryption/application handling for one LoRa transfer ID; collect legacy APPACK packet IDs while decryption is pending, and authenticate before acknowledging. Bad GCM/envelope data never enters the successful replay cache and can retry.
+- Bound the receive-in-progress map and successful-transfer cache; clear at browser disconnect and guard against asynchronous decryptions completing after key/session replacement.
+- Add deterministic replay stress (100,000 transitions), 40,000 malformed USB/media parser mutations, byte-wise AES-GCM tampering, transfer-ID AAD checks, full voice reassembly and Chromium concurrent-duplicate tests.
+- **Unchanged:** radio firmware and power policy, original ARQ/USB staging, OGM4 encryption, message/status semantics, media compression/segment lengths, and ESP-NOW-style web controls.
+- No persistent replay prevention for RF control packets across board resets, no independent audit, no hardware proof of security, and no ESP-IDF build in this environment. See `docs/V1_10_0_SECURITY_STABILITY.md`.
+
+
 ## v1.8.0-rc.6 — shorter-text latency and media queue fairness (2026-11-13)
 
 - **Web-only release on rc.5.** Keep both physical ESP32-C3 nodes running `FW=1.8.0-rc.4`; both browsers use `1.8.0-rc6-lora`. No SX1278, ARQ, authenticated control format, encryption, 48 KiB photo codec or 40 KiB voice changes.
