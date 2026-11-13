@@ -1,6 +1,14 @@
 # OffGrid Messenger LoRa
 
-**v1.8.0-rc.1 — encrypted photos and short Opus voice notes on the working v1.7 Auto-RF platform.**
+**v1.8.0-rc.2 — ESP-NOW-parity media controls restored in the LoRa web client (web-only repair).**
+
+**Compatibility:** **Keep both ESP32s on the existing `FW=1.8.0-rc.1`**. Only the browser assets change in this release: the original ESP-NOW-style `+` photo picker and microphone are visible again, and received media retains the original photo gallery and native audio player presentation. Do **not** flash or erase NVS for this hotfix; use the included `web/` directory on both browsers, hard refresh and reconnect USB. The browser version is `1.8.0-rc2-lora`, firmware remains `1.8.0-rc.1`.
+
+**Root cause:** an inherited v1.0 LoRa stylesheet explicitly had `#attachments, #voiceButton { display:none!important }`, even though v1.8 had implemented the photo and voice handlers. That rule has been removed. The original ESP-NOW stylesheet is still the literal CSS foundation of this client. Regression tests now require visible, enabled media buttons and actual photo-picker/mic click wiring in Chromium across desktop, split and mobile layouts; the earlier v1.8 tests checked only whether these elements existed, so they missed the regression.
+
+**Source constraints:** v1.8.0-rc.1 ESP-IDF firmware, SX1278 driver, ARQ engine, browser media/crypto logic, receipt code and the Android tree are unchanged. No new throughput claim or two-board field-validation claim is made. See `docs/V1_8_0_RC2_WEB_UI_REPAIR.md`.
+
+Previously: v1.8.0-rc.1 introduced encrypted photos and short Opus voice notes on the working v1.7 Auto-RF platform.
 
 This is a **source release candidate**. All browser C/JS/Node media tests and Chromium compression/short-Opus tests passed; **ESP-IDF 6.1 compilation and real two-board media transfers were not possible in the container**. The confirmed-working v1.7 ZIP remains the rollback.
 

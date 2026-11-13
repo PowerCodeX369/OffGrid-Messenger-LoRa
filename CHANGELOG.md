@@ -1,5 +1,13 @@
 # Changelog
 
+## [v1.8.0-rc.2] — 2026-11-13 · **web-only media UI repair**
+
+- Restore **visible and operable ESP-NOW-parity photo and voice composer controls** on the LoRa page. Root cause: obsolete v1.0 CSS set `#attachments, #voiceButton { display:none!important }` even after v1.8 added functional media handlers. Remove that override rather than rewriting working media code.
+- Preserve original ESP-NOW stylesheet and HTML media classes (`composer-attach`, `voice-button`, `chat-photo`, `voice-clip`, gallery), plus local image compression, browser Opus recorder and playback. Only the radio backend and honest size limits differ.
+- Bump browser JS version to `1.8.0-rc2-lora` and HTML asset cache keys to `lora180rc2` so browser reload fetches the corrected stylesheet. **Firmware version stays `1.8.0-rc.1` and requires no reflash.**
+- Add Chromium regression that asserts computed styles and real button visibility, opens the native photo chooser, exercises microphone handler and verifies received photo/audio elements at 1440/820/390px. The original test only checked that DOM elements existed and missed the CSS hide.
+- Keep the v1.8.0-rc.1 firmware, encrypted media codec, ARQ transport, Auto/manual power profiles, chat receipts and frozen Android source byte-identical. Host tests pass; physical two-radio media tests remain unverified.
+
 ## [v1.8.0-rc.1] — 2026-11-13
 
 - Add encrypted photo sending with size-targeted WebP/JPEG recompression and natural-detail-preserving resolution floor (48 KiB maximum). Existing gallery/zoom/download retained.

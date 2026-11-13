@@ -1,3 +1,9 @@
+# Web messenger v1.8.0-rc.2 — original ESP-NOW media UI restored
+
+**Web-only fix; no ESP32 reflash.** Keep firmware `FW=1.8.0-rc.1` on BOTH ESP32s. Use this entire `web/` folder on both browser sessions and hard-refresh so the updated `styles.css?v=lora180rc2` is loaded. The original ESP-NOW `+` photo-picker, microphone recording button, in-message image thumbnails/gallery and native voice-note controls now render with the same UI styling and interaction. They are disabled until the browser is connected and paired with the correct AES key.
+
+The original ESP-NOW CSS remains the base stylesheet. The old text-only LoRa CSS rule `#attachments, #voiceButton { display: none !important; }` caused the missing media controls; it has been removed. No RF/ARQ or media transfer protocol change is needed. Use `python3 tests/test_v18_ui_parity.py` (Chromium/Playwright optional) for rendered desktop, split and mobile checks. More details: `../docs/V1_8_0_RC2_WEB_UI_REPAIR.md`.
+
 # Web messenger v1.8.0-rc.1 — compressed and encrypted media
 
 Serve the complete `web/` directory over localhost/HTTPS and use **v1.8 firmware on both boards**. Photo `+` and microphone are enabled only after encryption pairing. Photos are recompressed as WebP/JPEG with an absolute 48 KiB budget (photo quality varies), voice records Opus at a suggested 16 kbps, with an absolute **20 KiB** budget (typically 7–12 seconds, NOT two minutes). Every 5,800-byte media part is separately AES-256-GCM encrypted, passed to the existing 7,168-byte radio bulk transport, and reassembled only after whole-media SHA verification. Delivered/read ticks require the usual encrypted application receipts.
