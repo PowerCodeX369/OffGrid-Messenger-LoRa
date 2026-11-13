@@ -19,7 +19,7 @@ with sync_playwright() as playwright:
                  'lora_benchmark.js','lora_receipts.js','lora_bulk.js','app.js']:
         page.add_script_tag(content=(root / name).read_text())
     page.locator('#settingsButton').click()
-    page.get_by_role('button', name='Manual LoRa profiles').click()
+    page.get_by_role('button', name='Automatic / manual LoRa modes').click()
     text = page.locator('#modalBody').inner_text()
     for phrase in ['Fast / Nominal','Balanced','Max Power','500 kHz','250 kHz','125 kHz','18 dBm']:
         assert phrase in text, (phrase, text)
@@ -48,6 +48,21 @@ with sync_playwright() as playwright:
     assert outcome['confirms']==1, outcome
     assert outcome['active']=='LOW' and not outcome['pending'], outcome
     assert outcome['finalMode']=='BALANCED' and not outcome['finalPending'], outcome
+    auto_result=page.evaluate("""async()=>{
+      verified=true;writer={};secretKey=new Uint8Array(32);
+      const commands=[];writeLine=async x=>commands.push(x);
+      window.confirm=()=>true;
+      await requestAutoMode(true);
+      onAutoLine('AUTO|ON|MODE=BALANCED|ENABLED=1|PEER=1|LEADER=1');
+      const enabled=autoMode;
+      onProfileLine('PROFILE|ACTIVE|LOW|SF=7|BW=500000|TX_DBM=18|AUTO=1');
+      const switched=currentProfile;
+      await requestAutoMode(false);
+      onAutoLine('AUTO|OFF|MODE=LOW|ENABLED=0|PEER=0|LEADER=1');
+      return {commands,enabled,switched,disabled:!autoMode};
+    }""")
+    assert auto_result['commands']==['POWER18 VERIFIED','AUTO ON','AUTO OFF'],auto_result
+    assert auto_result['enabled'] and auto_result['disabled'] and auto_result['switched']=='LOW',auto_result
     assert not errors, errors
     print('PASS: in-memory Chromium profile modal (no USB/RF test)')
     browser.close()

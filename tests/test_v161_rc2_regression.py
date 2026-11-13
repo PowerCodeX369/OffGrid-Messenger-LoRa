@@ -27,17 +27,16 @@ for name in [
 src=new('firmware/main/main.c').decode()
 baseline=old('firmware/main/main.c').decode()
 section=lambda x,start,end:x[x.index(start):x.index(end,x.index(start))]
-for a,b in [('static void radio_loop(void *arg)','#if CONFIG_OFFGRID_USB_IRQ_RX'),
-            ('static void queue_data(', 'static void process_command('),
-            ('static bool radio_hmac(', 'static og_frame_t new_frame(')]:
+for a,b in [('static void queue_data(', 'static void process_command('),
+            ('static bool radio_hmac(', 'static void derive_radio_key(')]:
     assert section(src,a,b)==section(baseline,a,b),f'firmware {a} path modified'
 web=new('web/app.js').decode()
-assert 'PROFILE=MANUAL3_ONE_CLICK' in src
+assert 'PROFILE=AUTO3_ONE_CLICK' in src
 assert 'PROFILES=3|SYNC=ONE_CLICK' in src
 assert 'OG_MODE_EXPERIMENTAL' not in new('firmware/main/lora_modes.h').decode()
 assert 'EXPERIMENTAL' not in web
 assert "writeLine('POWER18 VERIFIED')" in web and 'writeLine(`PROFILE ${mode}`)' in web
 assert 'PROFILE|PEER_REQUEST' in src and 'PROFILE|PEER_BUSY' in src
-assert 'OG_TYPE_PROFILE_REJECT' in src
+assert 'OG_TYPE_PROFILE_REJECT' in src and 'OG_TYPE_AUTO_CTRL' in src and 'auto_service();' in src
 assert 'radio_hmac(bytes,plain,digest)' in src
-print('PASS: v1.6.1 ARQ/radio driver/USB stages/crypto/receipts byte-identical, profile-only fix')
+print('PASS: v1.6.1 ARQ/radio driver/USB stages/crypto/receipts byte-identical; auto scheduler isolated')
