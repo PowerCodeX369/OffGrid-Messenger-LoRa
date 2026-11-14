@@ -13,7 +13,7 @@ int main(void){
     feed(&p,-50,28,1000);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,20000,false,false)==OG_MODE_BALANCED); /* warmup */
     assert(og_auto_decide(&p,OG_MODE_BALANCED,47500,false,false)==OG_MODE_BALANCED); /* stale */
-    feed(&p,-80,20,47000);
+    feed(&p,-70,20,47000);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,48100,false,false)==OG_MODE_BALANCED);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,52000,false,false)==OG_MODE_BALANCED);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,56000,false,false)==OG_MODE_BALANCED);
@@ -22,13 +22,13 @@ int main(void){
     feed(&p,-110,-4,110000);
     assert(og_auto_decide(&p,OG_MODE_LOW,110900,true,false)==OG_MODE_LOW);
     assert(og_auto_decide(&p,OG_MODE_LOW,111000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,115000,false,false)==OG_MODE_BALANCED);
+    assert(og_auto_decide(&p,OG_MODE_LOW,115000,false,false)==OG_MODE_MAX);
     og_auto_reset(&p,116000);
     feed(&p,-119,-24,162000);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,163000,false,false)==OG_MODE_BALANCED);
     assert(og_auto_decide(&p,OG_MODE_BALANCED,167000,false,false)==OG_MODE_MAX);
     og_auto_reset(&p,168000);
-    feed(&p,-93,24,215000);
+    feed(&p,-70,24,215000);
     assert(og_auto_decide(&p,OG_MODE_MAX,216000,false,false)==OG_MODE_MAX);
     assert(og_auto_decide(&p,OG_MODE_MAX,220000,false,false)==OG_MODE_MAX);
     assert(og_auto_decide(&p,OG_MODE_MAX,224000,false,false)==OG_MODE_MAX);
@@ -40,7 +40,21 @@ int main(void){
     og_auto_reset(&p,285000);
     feed(&p,-116,-20,286000);
     assert(og_auto_decide(&p,OG_MODE_LOW,288000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,292000,false,false)==OG_MODE_BALANCED);
+    assert(og_auto_decide(&p,OG_MODE_LOW,292000,false,false)==OG_MODE_MAX);
+    /* Observed range problem: downgrade ahead of -100 dBm, even during
+     * the anti-flap cooldown. Two fresh authenticated observations needed. */
+    og_auto_reset(&p,310000);
+    feed(&p,-86,8,311000);
+    assert(og_auto_decide(&p,OG_MODE_LOW,312000,false,false)==OG_MODE_LOW);
+    assert(og_auto_decide(&p,OG_MODE_LOW,316000,false,false)==OG_MODE_BALANCED);
+    og_auto_reset(&p,320000);
+    feed(&p,-92,4,321000);
+    assert(og_auto_decide(&p,OG_MODE_LOW,322000,false,false)==OG_MODE_LOW);
+    assert(og_auto_decide(&p,OG_MODE_LOW,326000,false,false)==OG_MODE_MAX);
+    og_auto_reset(&p,330000);
+    feed(&p,-89,4,331000);
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,332000,false,false)==OG_MODE_BALANCED);
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,336000,false,false)==OG_MODE_MAX);
     /* The signed OGM2 auto control and metric layouts are strict, so older
      * firmware cannot accidentally treat them as user plaintext. */
     og_frame_t a={.magic=OG_MAGIC,.version=OG_VERSION,.type=OG_TYPE_AUTO_CTRL,
@@ -59,6 +73,8 @@ int main(void){
     a.data[6]=1;a.data[7]=2;
     assert(og_wire_valid(&a,og_wire_length(&a)));
     a.data[5]=4;assert(!og_wire_valid(&a,og_wire_length(&a)));
+    assert(OG_AUTO_FAST_DOWN_RSSI > OG_AUTO_FAST_RANGE_RSSI);
+    assert(OG_AUTO_FAST_RANGE_RSSI >= OG_AUTO_BAL_DOWN_RSSI);
     assert(OG_AUTO_FAST_UP_RSSI>OG_AUTO_FAST_DOWN_RSSI);
     assert(OG_AUTO_BAL_UP_RSSI>OG_AUTO_BAL_DOWN_RSSI);
     puts("PASS: two-direction quality, hysteresis, cooldown, promotion, downgrade, busy/stale safety");

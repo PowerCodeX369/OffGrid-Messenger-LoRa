@@ -573,12 +573,16 @@ static og_frame_t auto_control_frame(uint8_t type,bool enable,uint32_t session,u
     return f;
 }
 static void auto_report(const char *state){
-    output("AUTO|%s|MODE=%s|ENABLED=%u|PEER=%u|LEADER=%u|LOCAL_RSSI=%d|PEER_RSSI=%d|LOCAL_SNR_Q4=%d|PEER_SNR_Q4=%d|SAMPLES=%u/%u\n",
+    output("AUTO|%s|MODE=%s|ENABLED=%u|PEER=%u|LEADER=%u|LOCAL_RSSI=%d|PEER_RSSI=%d|LOCAL_SNR_Q4=%d|PEER_SNR_Q4=%d|SAMPLES=%u/%u|QUALITY_READY=%u|LOCAL_AGE_MS=%" PRId64 "|REMOTE_AGE_MS=%" PRId64 "\n",
         state,og_mode_name(profile_state.current),(unsigned)auto_enabled,
         (unsigned)auto_peer_enabled,(unsigned)(peer_seen&&memcmp(own_mac,peer_mac,6)<0),
         (int)auto_policy.local.rssi_dbm,(int)auto_policy.remote.rssi_dbm,
         (int)auto_policy.local.snr_q4,(int)auto_policy.remote.snr_q4,
-        (unsigned)auto_policy.local.samples,(unsigned)auto_policy.remote.samples);
+        (unsigned)auto_policy.local.samples,(unsigned)auto_policy.remote.samples,
+        (unsigned)(og_auto_fresh(&auto_policy.local,(uint32_t)millis()) &&
+                   og_auto_fresh(&auto_policy.remote,(uint32_t)millis())),
+        (int64_t)(millis()-auto_policy.local.at_ms),
+        (int64_t)(millis()-auto_policy.remote.at_ms));
 }
 static void auto_command(bool enable){
     if(!radio_key_ready||!sx||!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){
@@ -634,15 +638,17 @@ static void auto_service(void){
         m.data[7]=(uint8_t)(loss_delta>15?15:loss_delta);
         (void)control_add(&m,50+(esp_random()%75));
     }
-    /* Exactly ONE coordinator per peer pair may initiate auto switches. */
+    /* Exactly ONE coordinator per peer pair may initiate auto switches.
+     * At weak signal, bypass scheduling deferral while retaining signed
+     * OFFER/AGREE/verify. Never switch only one node by RSSI alone. */
     const bool emergency=og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
         og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
         ((profile_state.current==OG_MODE_LOW &&
-          (auto_policy.local.rssi_dbm<=-113 || auto_policy.remote.rssi_dbm<=-113 ||
-           auto_policy.local.snr_q4<=-16 || auto_policy.remote.snr_q4<=-16)) ||
+          (auto_policy.local.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI || auto_policy.remote.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI ||
+           auto_policy.local.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4 || auto_policy.remote.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4)) ||
          (profile_state.current==OG_MODE_BALANCED &&
-          (auto_policy.local.rssi_dbm<=-119 || auto_policy.remote.rssi_dbm<=-119 ||
-           auto_policy.local.snr_q4<=-20 || auto_policy.remote.snr_q4<=-20)));
+          (auto_policy.local.rssi_dbm<=OG_AUTO_BAL_DOWN_RSSI || auto_policy.remote.rssi_dbm<=OG_AUTO_BAL_DOWN_RSSI ||
+           auto_policy.local.snr_q4<=OG_AUTO_BAL_DOWN_SNR_Q4 || auto_policy.remote.snr_q4<=OG_AUTO_BAL_DOWN_SNR_Q4)));
     if(memcmp(own_mac,peer_mac,6)>=0 || !auto_peer_enabled ||
        (media_boost_active && profile_state.current==OG_MODE_LOW && !emergency) ||
        profile_has_pending() || (now<auto_defer_until_ms && !emergency) || auto_ctrl_pending)return;
@@ -698,19 +704,21 @@ static void media_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=3|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=EARLY88|RF_LINK_AGE=1|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
     unsigned pending_count=0,ctrl_count=0;
     for(size_t i=0;i<OG_PENDING;i++)if(pending[i].used)pending_count++;
     for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.magic)ctrl_count++;
-    output("LINK|%s|RSSI=%d|PHY=0|MODE=LORA|OK=%" PRIu32 "|RETRY=%" PRIu32
+    const int64_t age_ms=peer_seen ? (millis()-peer_at_ms) : -1;
+    output("LINK|%s|RSSI=%d|PEER_AGE_MS=%" PRId64 "|RFHEARD=%u|PHY=0|MODE=LORA|OK=%" PRIu32 "|RETRY=%" PRIu32
            "|FAIL=%" PRIu32 "|TXOK=%" PRIu32 "|TXFAIL=%" PRIu32 "|RX=%" PRIu32
            "|HELLO=%" PRIu32 "|CHANGES=0|SNR_Q4=%d|RADIOACK=%" PRIu32
            "|BADTAG=%" PRIu32 "|CRC=%" PRIu32 "|TXDONE=%" PRIu32
            "|APPACK=%" PRIu32 "|ARQ_TX=%" PRIu32 "|ARQ_ACKTX=%" PRIu32 "|ARQ_ACKRX=%" PRIu32 "|ARQ_RETX=%" PRIu32 "|ARQ_TIMEOUT=%" PRIu32 "|ARQ_BADMAC=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PEER_ARQ=%u|PROFILE=%s|PROFILE_PHASE=%d|PROFILE_CHANGES=%" PRIu32 "|PROFILE_ROLLBACKS=%" PRIu32 "|AUTO=%u|AUTO_PEER=%u|AUTO_ATTEMPTS=%" PRIu32 "|AUTO_FAILURES=%" PRIu32 "\n",
-           p,(int)peer_rssi,stat_delivered,stat_retry,stat_fail,stat_tx,stat_tx_errors,
+           p,(int)peer_rssi,age_ms,(unsigned)(peer_seen && age_ms>=0 && age_ms<OG_PEER_STALE_MS),
+           stat_delivered,stat_retry,stat_fail,stat_tx,stat_tx_errors,
            stat_rx,stat_hello,(int)auto_policy.local.snr_q4,stat_radio_ack,stat_badtag,stat_crc,
            stat_tx_done,stat_appack,arq.tx_frames,arq.bitmap_acks_tx,
            arq.bitmap_acks_rx,arq.retransmits,arq.ack_timeouts,
@@ -843,7 +851,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         auto_last_metric_session=f.session;auto_last_metric_id=f.id;
         auto_peer_enabled=f.data[6]!=0;
         auto_peer_recent_losses=f.data[7];
-        if(auto_enabled&&auto_peer_enabled&&f.data[4]>=3){
+        if(auto_enabled&&auto_peer_enabled&&f.data[4]>=2){
             const int16_t rssi=(int16_t)((uint16_t)f.data[0]|(uint16_t)f.data[1]<<8);
             const int16_t snr=(int16_t)((uint16_t)f.data[2]|(uint16_t)f.data[3]<<8);
             og_auto_quality_note(&auto_policy.remote,rssi,snr,(uint32_t)millis());
@@ -1035,10 +1043,17 @@ static void process_command(const og_command_t *c) {
         }
         const bool both_fresh=og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
                               og_auto_fresh(&auto_policy.remote,(uint32_t)now);
-        if(auto_enabled && both_fresh &&
-           (auto_policy.local.rssi_dbm<=-106 || auto_policy.remote.rssi_dbm<=-106 ||
-            auto_policy.local.snr_q4<=-4 || auto_policy.remote.snr_q4<=-4 ||
-            auto_peer_recent_losses>=2)){
+        /* Do not override the EARLY weak-link adaptation by forcing media
+         * into Fast. Auto requires valid reports from BOTH directions;
+         * a poor local report also blocks the boost in manual mode. */
+        const bool local_weak=og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
+            (auto_policy.local.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI ||
+             auto_policy.local.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4);
+        const bool remote_weak=og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
+            (auto_policy.remote.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI ||
+             auto_policy.remote.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4);
+        if(local_weak || (auto_enabled &&
+           (!both_fresh || remote_weak || auto_peer_recent_losses>=2))){
             output("MEDIA|BYPASS|FAST_LINK_MARGIN_INSUFFICIENT\n");return;
         }
         media_original_mode=profile_state.current;

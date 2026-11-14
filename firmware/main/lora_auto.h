@@ -20,14 +20,19 @@
  * its manual +10 dBm would be WEAKER than Fast +18 in link-budget terms.
  * User MUST confirm both module supplies/antennas before AUTO ON.
  */
-#define OG_AUTO_FAST_DOWN_RSSI (-106)
-#define OG_AUTO_FAST_UP_RSSI (-97)
-#define OG_AUTO_BAL_DOWN_RSSI (-113)
-#define OG_AUTO_BAL_UP_RSSI (-104)
-#define OG_AUTO_FAST_DOWN_SNR_Q4 (-4)   /* -1 dB */
-#define OG_AUTO_FAST_UP_SNR_Q4 (12)    /* +3 dB */
-#define OG_AUTO_BAL_DOWN_SNR_Q4 (-12) /* -3 dB */
-#define OG_AUTO_BAL_UP_SNR_Q4 (8)    /* +2 dB */
+/* Field-tuned EARLY warnings: operator observed failed delivery around -100
+ * dBm. These values are conservative SITE-SPECIFIC starting thresholds, NOT
+ * the SX1278 sensitivity floor. The radio is never changed unilaterally.
+ * An authenticated second node must accept the switch on the old mode. */
+#define OG_AUTO_FAST_DOWN_RSSI (-84)
+#define OG_AUTO_FAST_RANGE_RSSI (-88)
+#define OG_AUTO_FAST_UP_RSSI (-74)
+#define OG_AUTO_BAL_DOWN_RSSI (-88)
+#define OG_AUTO_BAL_UP_RSSI (-79)
+#define OG_AUTO_FAST_DOWN_SNR_Q4 (0)    /* 0 dB */
+#define OG_AUTO_FAST_UP_SNR_Q4 (16)     /* +4 dB */
+#define OG_AUTO_BAL_DOWN_SNR_Q4 (-8)    /* -2 dB */
+#define OG_AUTO_BAL_UP_SNR_Q4 (12)     /* +3 dB */
 
 typedef struct {
     int16_t rssi_dbm;
@@ -59,7 +64,7 @@ static inline void og_auto_quality_note(og_auto_quality_t *q,int16_t rssi,int16_
     q->at_ms=now;
 }
 static inline bool og_auto_fresh(const og_auto_quality_t *q,uint32_t now){
-    return q && q->samples>=3 && (uint32_t)(now-q->at_ms)<OG_AUTO_METRIC_FRESH_MS;
+    return q && q->samples>=2 && (uint32_t)(now-q->at_ms)<OG_AUTO_METRIC_FRESH_MS;
 }
 /* Only the elected coordinator evaluates the decision. Both directions must
  * have recent authenticated measurements; use the WORSE direction. */
@@ -73,8 +78,12 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
     /* Under sharply degrading RF conditions, do not stay stuck on a
      * faster mode during a normal 45-second anti-flap cooldown. Still
      * require two separate decisions on TWO authenticated measurements. */
-    const bool urgent_down=(current==OG_MODE_LOW && (rssi<=-113 || snr<=-16)) ||
-                           (current==OG_MODE_BALANCED && (rssi<=-119 || snr<=-20));
+    /* Degradation must NOT be held behind a 45s cooldown. Keep cooldown
+     * only for promotion; two authenticated observations still required. */
+    const bool urgent_down=(current==OG_MODE_LOW &&
+        (rssi<=OG_AUTO_FAST_DOWN_RSSI || snr<=OG_AUTO_FAST_DOWN_SNR_Q4)) ||
+        (current==OG_MODE_BALANCED &&
+        (rssi<=OG_AUTO_BAL_DOWN_RSSI || snr<=OG_AUTO_BAL_DOWN_SNR_Q4));
     if((uint32_t)(now-p->changed_ms)<OG_AUTO_COOLDOWN_MS && !urgent_down)return current;
     p->last_decision_ms=now;
     bool down=false,up=false;
@@ -95,9 +104,13 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
     p->up_streak=up && p->up_streak<255?p->up_streak+1:up?p->up_streak:0;
     if(p->down_streak>=OG_AUTO_DOWN_STREAK){
         p->down_streak=p->up_streak=0;
-        return current==OG_MODE_LOW?OG_MODE_BALANCED:OG_MODE_MAX;
+        /* In severe degradation skip Balanced to avoid another handshake
+         * near loss of contact. Both devices still confirm MAX together. */
+        return current==OG_MODE_LOW && rssi<=OG_AUTO_FAST_RANGE_RSSI
+            ? OG_MODE_MAX : current==OG_MODE_LOW?OG_MODE_BALANCED:OG_MODE_MAX;
     }
     if(p->up_streak>=OG_AUTO_UP_STREAK &&
+       (uint32_t)(now-p->changed_ms)>=OG_AUTO_COOLDOWN_MS &&
        (uint32_t)(now-p->started_ms)>=OG_AUTO_PROMOTION_MS){
         p->down_streak=p->up_streak=0;
         return current==OG_MODE_MAX?OG_MODE_BALANCED:OG_MODE_LOW;
