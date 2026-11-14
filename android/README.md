@@ -1,3 +1,5 @@
+> **v3.0.3-rc.1 source:** build the native app with versionCode 303; fixes Auto/manual failure visibility and stale LoRa RSSI. Original Compose layouts remain unchanged. Companion firmware on BOTH ESP32s is needed for early weak-link switching. [Details](../docs/ANDROID_RF_RANGE_V3_0_3.md).
+
 # OffGrid Messenger Android — original native app, LoRa transport
 
 **v3.0.2-rc.1 (source candidate, based on v3.0.1)**. The original native Android Compose application is again the **only launcher**. The experimental v3.0.0 WebView UI, alternate connection picker, and bundled HTML/CSS/JS screen have been removed. The original native chat layout, theme, icons, camera, BLE pairing screens, background service and encrypted history remain unchanged. **Only the radio dropdown text/options are updated to the real LoRa modes**; no alternative chat UI was introduced.

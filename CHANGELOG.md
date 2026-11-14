@@ -1,3 +1,11 @@
+## v3.0.3-rc.1 — Early LoRa Range switching and true RF-link status (Android + firmware)
+
+- Field-tuned proactive two-node Auto RF downgrade ahead of the observed -100 dBm delivery failure; keep signed handshake, rollback and manual control.
+- Distinguish BLE connected vs authenticated LoRa peer heard using age-tagged `LINK` telemetry; show native Android rejection reasons.
+- Fix Android versionCode/name so the new build can be distinguished from v3.0.1; preserve original Compose UI and web app.
+- Protect weak links from inappropriate temporary Fast media boost; preserve encrypted media transport and BLE GATT authentication.
+- **Source-level verification only**; real ESP-IDF/Android builds and RF range tests still pending. See `docs/ANDROID_RF_RANGE_V3_0_3.md`.
+
 ## v3.0.2-rc.1 — Native Android LoRa menu and authenticated Fast media handover (2026-11-14)
 
 - Preserve the original native Android Compose chat UI, replacing **only** obsolete ESP-NOW radio menu labels/choices with Auto, Fast, Balanced and Max Range. Interpret actual SX1278 `LINK|...|PROFILE=...|AUTO=...` telemetry; no fictional `LR 250/500 kbps` LoRa setting.

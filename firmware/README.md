@@ -1,3 +1,5 @@
+> **RF policy EARLY88 (Android v3.0.3 companion):** AUTO is opt-in, requires explicit legal/hardware authorization for nominal 18 dBm. Aggressive downgrades are authenticated and synchronized; web `READY` base FW identifier remains 1.8.0-rc.4 for strict client compatibility. Verify `RF_POLICY=EARLY88` and read [field test procedure](../docs/ANDROID_RF_RANGE_V3_0_3.md).
+
 # Firmware v1.8.0-rc.1 — LoRa media-capable bridge
 
 The v1.7 SX1278 SPI2 driver, radio frame authentication, 224-byte ARQ fragments, six-packet selective-repeat bitmap window, authenticated profile negotiation, 3 manual power/speed modes, and two-way RSSI/SNR AUTO policy are unchanged. No images or audio are decoded/stored in MCU RAM: the browser compresses and AES-GCM encrypts **5,800-byte media segments**, and firmware just forwards each via the existing `BULK` USB/RF mechanism. The local physical-USB `MEDIA ON` hint may trigger the existing authenticated FAST profile handshake **only if AUTO was enabled** and both sides have safe signal margins; `MEDIA OFF` cancels the hint. A hint automatically expires after 10 minutes. Cannot recover an already-silent RF link without a confirmed handshake.
