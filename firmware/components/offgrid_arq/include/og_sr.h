@@ -25,6 +25,17 @@ extern "C" {
 #define OG_SR_MAX_WINDOW 6u
 #define OG_SR_MAX_ATTEMPTS 5u
 #define OG_SR_FLAG_END_BURST 1u
+#define OG_SR_FLAG_ULTRA 2u
+#define OG_SR_FLAG_SIZE_MASK 12u
+#define OG_SR_ULTRA_MIN_PAYLOAD 48u
+#define OG_SR_ULTRA_MAX_PAYLOAD 96u
+static inline uint8_t og_sr_payload_from_flags(uint8_t flags) {
+    return (flags & OG_SR_FLAG_ULTRA) ? (uint8_t)(48u+16u*((flags>>2u)&3u)) : OG_SR_PAYLOAD;
+}
+static inline uint8_t og_sr_flags_from_payload(uint8_t n) {
+    return n==OG_SR_PAYLOAD ? 0u : (n>=48u && n<=96u && (n-48u)%16u==0u) ?
+           (uint8_t)(OG_SR_FLAG_ULTRA | ((n-48u)/16u<<2u)) : 0xFFu;
+}
 
 typedef enum {
     OG_SR_DATA=1,
@@ -65,7 +76,7 @@ typedef struct {
     uint32_t session, transfer;
     const uint8_t *ciphertext; /* Owned by caller; live until completion. */
     size_t byte_count;
-    uint8_t fragments, window;
+    uint8_t fragments, window, fragment_payload;
     uint8_t attempts[OG_SR_MAX_FRAGMENTS];
     uint32_t acknowledged, transmitted, current_burst;
     uint32_t deadline_ms;
@@ -74,6 +85,8 @@ typedef struct {
 
 /* Client must supply freshly unpredictable IDs and an AES-GCM ciphertext.
  * This layer deliberately does NOT generate session IDs or encrypt plaintext. */
+bool og_sr_tx_init_ex(og_sr_tx_t *tx,uint32_t session,uint32_t transfer,
+                   const uint8_t *ciphertext,size_t n,uint8_t window,uint8_t fragment_payload);
 bool og_sr_tx_init(og_sr_tx_t *tx,uint32_t session,uint32_t transfer,
                    const uint8_t *ciphertext,size_t n,uint8_t window);
 /* Pick one packet for the radio owner. Caller performs exactly one TX and
@@ -89,7 +102,7 @@ void og_sr_tx_tick(og_sr_tx_t *tx,uint32_t now_ms);
 
 typedef struct {
     uint32_t session,transfer;
-    uint8_t expected;
+    uint8_t expected, fragment_payload;
     uint32_t received;
     uint8_t *buffer;
     size_t capacity, received_bytes;
@@ -99,6 +112,8 @@ typedef struct {
 } og_sr_rx_t;
 
 /* External bounded buffer holds ciphertext only, never decrypted plaintext. */
+bool og_sr_rx_init_ex(og_sr_rx_t *rx,uint32_t session,uint32_t transfer,
+                   uint8_t count,uint8_t *ciphertext_buffer,size_t capacity,uint8_t fragment_payload);
 bool og_sr_rx_init(og_sr_rx_t *rx,uint32_t session,uint32_t transfer,
                    uint8_t count,uint8_t *ciphertext_buffer,size_t capacity);
 /* Call ONLY after og_sr_decode HMAC-verifies frame. */

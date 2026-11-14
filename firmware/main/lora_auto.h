@@ -9,7 +9,7 @@
 #include <stdbool.h>
 #include "lora_modes.h"
 #define OG_AUTO_METRIC_PERIOD_MS 3500u
-#define OG_AUTO_METRIC_FRESH_MS 18000u
+#define OG_AUTO_METRIC_FRESH_MS 90000u
 #define OG_AUTO_COOLDOWN_MS 45000u
 #define OG_AUTO_PROMOTION_MS 22000u
 #define OG_AUTO_DOWN_STREAK 2u
@@ -80,7 +80,8 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
      * require two separate decisions on TWO authenticated measurements. */
     /* Degradation must NOT be held behind a 45s cooldown. Keep cooldown
      * only for promotion; two authenticated observations still required. */
-    const bool urgent_down=(current==OG_MODE_LOW &&
+    const bool urgent_down=(current==OG_MODE_MAX &&
+        (rssi<=-113 || snr<=-20 || rf_loss)) || (current==OG_MODE_LOW &&
         (rssi<=OG_AUTO_FAST_DOWN_RSSI || snr<=OG_AUTO_FAST_DOWN_SNR_Q4)) ||
         (current==OG_MODE_BALANCED &&
         (rssi<=OG_AUTO_BAL_DOWN_RSSI || snr<=OG_AUTO_BAL_DOWN_SNR_Q4));
@@ -96,7 +97,15 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
             up=rssi>=OG_AUTO_FAST_UP_RSSI && snr>=OG_AUTO_FAST_UP_SNR_Q4;
             break;
         case OG_MODE_MAX:
+            /* SF9 is unchanged. Prevent waiting until the receiver noise
+             * floor before proposing Ultra SF12 on the existing profile. */
+            down=rf_loss || rssi<=-113 || snr<=-20;
             up=rssi>=OG_AUTO_BAL_UP_RSSI && snr>=OG_AUTO_BAL_UP_SNR_Q4;
+            break;
+        case OG_MODE_ULTRA:
+            /* Slow SF12 periodic metrics. Require a sustained 120s recovery
+             * before returning to the existing SF9 Range profile. */
+            up=rssi>=-103 && snr>=12 && !rf_loss;
             break;
         default:return current;
     }
@@ -107,13 +116,16 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
         /* In severe degradation skip Balanced to avoid another handshake
          * near loss of contact. Both devices still confirm MAX together. */
         return current==OG_MODE_LOW && rssi<=OG_AUTO_FAST_RANGE_RSSI
-            ? OG_MODE_MAX : current==OG_MODE_LOW?OG_MODE_BALANCED:OG_MODE_MAX;
+            ? OG_MODE_MAX : current==OG_MODE_LOW?OG_MODE_BALANCED:
+              current==OG_MODE_BALANCED?OG_MODE_MAX:OG_MODE_ULTRA;
     }
     if(p->up_streak>=OG_AUTO_UP_STREAK &&
        (uint32_t)(now-p->changed_ms)>=OG_AUTO_COOLDOWN_MS &&
-       (uint32_t)(now-p->started_ms)>=OG_AUTO_PROMOTION_MS){
+       (uint32_t)(now-p->started_ms)>=OG_AUTO_PROMOTION_MS &&
+       (current!=OG_MODE_ULTRA || (uint32_t)(now-p->changed_ms)>=120000u)){
         p->down_streak=p->up_streak=0;
-        return current==OG_MODE_MAX?OG_MODE_BALANCED:OG_MODE_LOW;
+        return current==OG_MODE_ULTRA?OG_MODE_MAX:
+               current==OG_MODE_MAX?OG_MODE_BALANCED:OG_MODE_LOW;
     }
     return current;
 }

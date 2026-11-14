@@ -11,10 +11,12 @@
 #define OG_MODE_LOW 1u
 #define OG_MODE_BALANCED 2u
 #define OG_MODE_MAX 3u
+#define OG_MODE_ULTRA 4u
 static inline const char *og_mode_name(uint8_t mode) {
     switch(mode) {case OG_MODE_LOW:return "LOW";
                   case OG_MODE_BALANCED:return "BALANCED";
                   case OG_MODE_MAX:return "MAX";
+                  case OG_MODE_ULTRA:return "ULTRA";
                   default:return "INVALID";}
 }
 static inline uint8_t og_mode_parse(const char *name) {
@@ -22,6 +24,7 @@ static inline uint8_t og_mode_parse(const char *name) {
     if(!strcmp(name,"LOW"))return OG_MODE_LOW;
     if(!strcmp(name,"BALANCED"))return OG_MODE_BALANCED;
     if(!strcmp(name,"MAX"))return OG_MODE_MAX;
+    if(!strcmp(name,"ULTRA"))return OG_MODE_ULTRA;
     return 0;
 }
 /* Time starts after TxDone. ACK air time increases with SF and decreases
@@ -29,7 +32,7 @@ static inline uint8_t og_mode_parse(const char *name) {
 static inline uint32_t og_mode_ack_wait_ms(uint8_t mode, unsigned attempt) {
     if(attempt>4u)attempt=4u;
     const uint32_t base=mode==OG_MODE_LOW?230u:
-                        mode==OG_MODE_BALANCED?360u:640u;
+                        mode==OG_MODE_BALANCED?360u:mode==OG_MODE_MAX?640u:3200u;
     return base+(uint32_t)attempt*115u;
 }
 static inline offgrid_sx1278_profile_t og_mode_profile(uint8_t mode) {
@@ -46,6 +49,12 @@ static inline offgrid_sx1278_profile_t og_mode_profile(uint8_t mode) {
         p.bandwidth=OFFGRID_SX1278_BW_125_KHZ;
         p.spreading_factor=9;
         p.tx_power_dbm=18; /* Ra-02 module-rated nominal; opt-in PA_DAC. */
+        p.high_pa_dac=true;
+    }else if(mode==OG_MODE_ULTRA){
+        /* SF12/BW125, CR4/5, explicit header, CRC, low data rate optimize. */
+        p.bandwidth=OFFGRID_SX1278_BW_125_KHZ;
+        p.spreading_factor=12;
+        p.tx_power_dbm=18;
         p.high_pa_dac=true;
     }
     return p;

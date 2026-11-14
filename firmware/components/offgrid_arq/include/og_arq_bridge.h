@@ -32,6 +32,8 @@ typedef struct {
     uint8_t usb_bytes[OG_SR_MAX_TRANSFER];
     uint8_t tx_bytes[OG_SR_MAX_TRANSFER];
     og_sr_tx_t tx;
+    uint8_t configured_payload, configured_window;
+    bool ultra_active;
     bool tx_used, tx_urgent, tx_sent_announced;
     uint32_t tx_last_at, next_tx_at, last_progress;
     uint8_t tx_local_errors;
@@ -51,6 +53,7 @@ typedef struct {
 } og_arq_bridge_t;
 
 void og_arq_bridge_init(og_arq_bridge_t *s);
+void og_arq_bridge_set_ultra(og_arq_bridge_t *s,bool ultra,uint8_t payload,uint8_t window);
 bool og_arq_bridge_busy(const og_arq_bridge_t *s);
 void og_arq_bridge_cancel(og_arq_bridge_t *s,const og_arq_io_t *io,const char *reason);
 /* Split a browser's 64-bit AES-GCM transferId into two LE32 words. */

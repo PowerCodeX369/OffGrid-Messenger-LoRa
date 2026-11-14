@@ -15,10 +15,12 @@ static uint32_t expected_mask(uint8_t n) {
 }
 static bool frame_ok(const og_sr_frame_t *f) {
     if(!f || !f->session || !f->transfer || f->count<1 ||
-       f->count>OG_SR_MAX_FRAGMENTS || (f->flags&~OG_SR_FLAG_END_BURST))return false;
+       f->count>OG_SR_MAX_FRAGMENTS || (f->flags&~(OG_SR_FLAG_END_BURST|OG_SR_FLAG_ULTRA|OG_SR_FLAG_SIZE_MASK)))return false;
     if(f->type==OG_SR_DATA){
-        if(f->index>=f->count || f->length<1 || f->length>OG_SR_PAYLOAD)return false;
-        if(f->index+1<f->count && f->length!=OG_SR_PAYLOAD)return false;
+        const uint8_t payload=og_sr_payload_from_flags(f->flags);
+        if(!(f->flags&OG_SR_FLAG_ULTRA) && (f->flags&OG_SR_FLAG_SIZE_MASK))return false;
+        if(f->index>=f->count || f->length<1 || f->length>payload)return false;
+        if(f->index+1<f->count && f->length!=payload)return false;
         return true;
     }
     if(f->type==OG_SR_BITMAP_ACK){
@@ -68,16 +70,21 @@ bool og_sr_decode(const uint8_t *wire,size_t n,og_sr_frame_t *f,
     return true;
 }
 
-bool og_sr_tx_init(og_sr_tx_t *t,uint32_t session,uint32_t transfer,
-                   const uint8_t *ciphertext,size_t n,uint8_t window) {
+bool og_sr_tx_init_ex(og_sr_tx_t *t,uint32_t session,uint32_t transfer,
+                   const uint8_t *ciphertext,size_t n,uint8_t window,uint8_t payload) {
     if(!t || !session || !transfer || !ciphertext || n==0 ||
-       n>OG_SR_MAX_TRANSFER || window==0 || window>OG_SR_MAX_WINDOW)return false;
+       n>OG_SR_MAX_TRANSFER || window==0 || window>OG_SR_MAX_WINDOW ||
+       og_sr_flags_from_payload(payload)==0xFFu || n>(size_t)OG_SR_MAX_FRAGMENTS*payload)return false;
     memset(t,0,sizeof(*t));
     t->session=session;t->transfer=transfer;
-    t->ciphertext=ciphertext;t->byte_count=n;t->window=window;
-    t->fragments=(uint8_t)((n+OG_SR_PAYLOAD-1u)/OG_SR_PAYLOAD);
+    t->ciphertext=ciphertext;t->byte_count=n;t->window=window;t->fragment_payload=payload;
+    t->fragments=(uint8_t)((n+payload-1u)/payload);
     t->phase=OG_SR_MORE;
     return true;
+}
+bool og_sr_tx_init(og_sr_tx_t *t,uint32_t session,uint32_t transfer,
+                   const uint8_t *ciphertext,size_t n,uint8_t window){
+    return og_sr_tx_init_ex(t,session,transfer,ciphertext,n,window,OG_SR_PAYLOAD);
 }
 
 bool og_sr_tx_pick(og_sr_tx_t *t,og_sr_frame_t *f) {
@@ -91,20 +98,24 @@ bool og_sr_tx_pick(og_sr_tx_t *t,og_sr_frame_t *f) {
     uint8_t which=base;
     while(which<exclusive && (!(pending&(1u<<which)) || (t->current_burst&(1u<<which))))which++;
     if(which==exclusive){t->phase=OG_SR_WAIT_ACK;return false;}
-    if(t->attempts[which]>=OG_SR_MAX_ATTEMPTS){t->phase=OG_SR_FAILED;return false;}
+    /* Ultra-only: extend selective ARQ retries without changing the proven
+     * five-attempt Fast/Balanced/SF9 behavior. Retries never invent an ACK. */
+    const unsigned limit=t->fragment_payload==OG_SR_PAYLOAD ? OG_SR_MAX_ATTEMPTS : 8u;
+    if(t->attempts[which]>=limit){t->phase=OG_SR_FAILED;return false;}
     memset(f,0,sizeof(*f));
     f->type=OG_SR_DATA;f->session=t->session;f->transfer=t->transfer;
     f->index=which;f->count=t->fragments;
-    const size_t offset=(size_t)which*OG_SR_PAYLOAD;
+    const size_t offset=(size_t)which*t->fragment_payload;
     const size_t remaining=t->byte_count-offset;
-    f->length=(uint8_t)(remaining>=OG_SR_PAYLOAD?OG_SR_PAYLOAD:remaining);
+    f->length=(uint8_t)(remaining>=t->fragment_payload?t->fragment_payload:remaining);
+    f->flags=og_sr_flags_from_payload(t->fragment_payload);
     memcpy(f->payload,t->ciphertext+offset,f->length);
     /* Only mark END on the last new packet of this window. */
     bool any_following=false;
     for(uint8_t j=(uint8_t)(which+1);j<exclusive;j++) {
         if((pending&(1u<<j)) && !(t->current_burst&(1u<<j)))any_following=true;
     }
-    if(!any_following)f->flags=OG_SR_FLAG_END_BURST;
+    if(!any_following)f->flags|=OG_SR_FLAG_END_BURST;
     return true;
 }
 
@@ -148,24 +159,29 @@ void og_sr_tx_tick(og_sr_tx_t *t,uint32_t now_ms) {
     }
 }
 
-bool og_sr_rx_init(og_sr_rx_t *r,uint32_t session,uint32_t transfer,
-                   uint8_t count,uint8_t *buffer,size_t capacity) {
+bool og_sr_rx_init_ex(og_sr_rx_t *r,uint32_t session,uint32_t transfer,
+                   uint8_t count,uint8_t *buffer,size_t capacity,uint8_t payload) {
     if(!r || !session || !transfer || !buffer || count==0 ||
-       count>OG_SR_MAX_FRAGMENTS || capacity<(size_t)count*OG_SR_PAYLOAD)return false;
+       count>OG_SR_MAX_FRAGMENTS || og_sr_flags_from_payload(payload)==0xFFu || capacity<(size_t)count*payload)return false;
     memset(r,0,sizeof(*r));
-    r->session=session;r->transfer=transfer;r->expected=count;
+    r->session=session;r->transfer=transfer;r->expected=count;r->fragment_payload=payload;
     r->buffer=buffer;r->capacity=capacity;
     return true;
+}
+bool og_sr_rx_init(og_sr_rx_t *r,uint32_t session,uint32_t transfer,
+                   uint8_t count,uint8_t *buffer,size_t capacity){
+    return og_sr_rx_init_ex(r,session,transfer,count,buffer,capacity,OG_SR_PAYLOAD);
 }
 
 bool og_sr_rx_push(og_sr_rx_t *r,const og_sr_frame_t *f,uint32_t now_ms,
                    uint32_t delayed_ack_ms) {
     if(!r || !f || !frame_ok(f) || f->type!=OG_SR_DATA ||
        f->session!=r->session || f->transfer!=r->transfer ||
-       f->count!=r->expected || delayed_ack_ms==0)return false;
+       f->count!=r->expected || delayed_ack_ms==0 ||
+       og_sr_payload_from_flags(f->flags)!=r->fragment_payload)return false;
     const uint32_t bit=1u<<f->index;
     if(!(r->received&bit)){
-        const size_t offset=(size_t)f->index*OG_SR_PAYLOAD;
+        const size_t offset=(size_t)f->index*r->fragment_payload;
         if(offset+f->length>r->capacity)return false;
         memcpy(r->buffer+offset,f->payload,f->length);
         r->received|=bit;r->received_bytes+=f->length;
@@ -186,7 +202,7 @@ bool og_sr_rx_complete(const og_sr_rx_t *r) {
 }
 
 size_t og_sr_rx_size(const og_sr_rx_t *r) {
-    return og_sr_rx_complete(r)?((size_t)(r->expected-1u)*OG_SR_PAYLOAD+r->last_length):0;
+    return og_sr_rx_complete(r)?((size_t)(r->expected-1u)*r->fragment_payload+r->last_length):0;
 }
 
 bool og_sr_rx_ack_due(const og_sr_rx_t *r,uint32_t now_ms) {

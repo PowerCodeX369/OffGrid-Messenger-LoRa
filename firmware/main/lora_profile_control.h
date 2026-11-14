@@ -20,10 +20,10 @@
 #define OG_PROFILE_MEDIA_FLAG 0x10u
 #define OG_PROFILE_REJECT_BUSY 0x01u
 static inline bool og_profile_mode_valid(uint8_t mode) {
-    return mode==OG_MODE_LOW || mode==OG_MODE_BALANCED || mode==OG_MODE_MAX;
+    return mode==OG_MODE_LOW || mode==OG_MODE_BALANCED || mode==OG_MODE_MAX || mode==OG_MODE_ULTRA;
 }
 static inline bool og_profile_high_pa(uint8_t mode) {
-    return mode==OG_MODE_LOW || mode==OG_MODE_MAX;
+    return mode==OG_MODE_LOW || mode==OG_MODE_MAX || mode==OG_MODE_ULTRA;
 }
 static inline bool og_profile_control_valid(const og_frame_t *f) {
     if(!f || !og_profile_mode_valid(f->data[0]) ||

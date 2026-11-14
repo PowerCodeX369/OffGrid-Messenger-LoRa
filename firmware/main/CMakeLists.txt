@@ -5,8 +5,8 @@ else()
   set(og_usb_dep driver)
 endif()
 idf_component_register(
-  SRCS "main.c" "ble_bridge.c"
-  INCLUDE_DIRS "."
+  SRCS "main.c" "ble_bridge.c" "ultra/og_ultra_policy.c"
+  INCLUDE_DIRS "." "ultra"
   REQUIRES bt mbedtls nvs_flash esp_timer esp_hw_support
   PRIV_REQUIRES offgrid_sx1278 offgrid_arq ${og_usb_dep}
 )

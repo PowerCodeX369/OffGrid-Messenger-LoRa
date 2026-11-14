@@ -23,6 +23,17 @@ static void emit_failure(const og_arq_io_t *io,uint32_t session,uint32_t transfe
 }
 static uint32_t bitmask(uint8_t n){return n==32?UINT32_MAX:(1u<<n)-1u;}
 void og_arq_bridge_init(og_arq_bridge_t *s){if(s)memset(s,0,sizeof(*s));}
+/* Called by the one radio worker before staging an encrypted transfer, never
+ * while one is on air. Ultra fragment metadata is HMAC-covered in every
+ * frame: receiver reconstructs lengths even if index zero was lost. */
+void og_arq_bridge_set_ultra(og_arq_bridge_t *s,bool ultra,uint8_t payload,uint8_t window){
+    if(!s || s->tx_used || s->usb.active || s->rx_forwarding)return;
+    if(ultra && (og_sr_flags_from_payload(payload)==0xFFu ||
+                 payload==OG_SR_PAYLOAD || !window || window>3u))return;
+    s->ultra_active=ultra;
+    s->configured_payload=ultra?payload:OG_SR_PAYLOAD;
+    s->configured_window=ultra?window:OG_SR_MAX_WINDOW;
+}
 bool og_arq_bridge_busy(const og_arq_bridge_t *s){
     return s && (s->usb.active || s->tx_used || (s->rx_used && !s->rx_forwarded));
 }
@@ -71,7 +82,9 @@ bool og_arq_bridge_end(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
         emit_failure(io,session,transfer,"STAGING_CRC_OR_LENGTH");return false;
     }
     memcpy(s->tx_bytes,s->usb_bytes,s->usb.received);
-    if(!og_sr_tx_init(&s->tx,session,transfer,s->tx_bytes,s->usb.received,OG_SR_MAX_WINDOW)){
+    if(!og_sr_tx_init_ex(&s->tx,session,transfer,s->tx_bytes,s->usb.received,
+           s->ultra_active?s->configured_window:OG_SR_MAX_WINDOW,
+           s->ultra_active?s->configured_payload:OG_SR_PAYLOAD)){
         emit_failure(io,session,transfer,"INVALID_TRANSFER");return false;
     }
     s->tx_used=true;s->tx_sent_announced=false;s->last_progress=0;
@@ -125,10 +138,12 @@ bool og_arq_bridge_receive(og_arq_bridge_t *s,const uint8_t *wire,size_t n,
         s->rx_used=false;s->rx_forwarding=false;s->rx_forwarded=false;
     }
     if(!s->rx_used){
-        if(!og_sr_rx_init(&s->rx,frame.session,frame.transfer,frame.count,
-                           s->rx_bytes,sizeof(s->rx_bytes)))return true;
+        if((s->ultra_active != ((frame.flags&OG_SR_FLAG_ULTRA)!=0)) ||
+           !og_sr_rx_init_ex(&s->rx,frame.session,frame.transfer,frame.count,
+                           s->rx_bytes,sizeof(s->rx_bytes),og_sr_payload_from_flags(frame.flags)))return true;
         s->rx_used=true;s->rx_forwarded=false;s->rx_forwarding=false;
     }
+    if(s->rx.fragment_payload!=og_sr_payload_from_flags(frame.flags))return true;
     if(s->rx.received & (1u<<frame.index))s->rx_duplicates++;
     /* Caller ensures data was authenticated before this call. */
     if(!og_sr_rx_push(&s->rx,&frame,now,ack_silence_ms)){return true;}

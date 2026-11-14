@@ -60,11 +60,11 @@ static inline bool og_wire_valid(const og_frame_t *f, size_t n) {
             f->id==((uint32_t)f->data[2] | (uint32_t)f->data[3]<<8 |
                     (uint32_t)f->data[4]<<16 | (uint32_t)f->data[5]<<24);
     if(f->type==OG_TYPE_AUTO_METRIC)
-        return f->length==8 && f->data[5]>=1 && f->data[5]<=3 && f->data[6]<=1;
-    if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 && f->data[0]==1;
+        return f->length==8 && f->data[5]>=1 && f->data[5]<=4 && f->data[6]<=1;
+    if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 && (f->data[0]==1 || f->data[0]==2);
     if(f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE ||
        f->type==OG_TYPE_PROFILE_REJECT)
-        return f->length==6 && f->data[0]>=1 && f->data[0]<=3;
+        return f->length==6 && f->data[0]>=1 && f->data[0]<=4;
     return f->type == OG_TYPE_DATA ? f->length > 0 : f->length == 0;
 }
 static inline size_t og_wire_length(const og_frame_t *f) {
