@@ -1,3 +1,11 @@
+## v3.0.2-rc.1 — Native Android LoRa menu and authenticated Fast media handover (2026-11-14)
+
+- Preserve the original native Android Compose chat UI, replacing **only** obsolete ESP-NOW radio menu labels/choices with Auto, Fast, Balanced and Max Range. Interpret actual SX1278 `LINK|...|PROFILE=...|AUTO=...` telemetry; no fictional `LR 250/500 kbps` LoRa setting.
+- Fix missing nominal +18 dBm authorization that previously made `MEDIA ON` return `MEDIA|BYPASS|POWER18_NOT_VERIFIED` on Android. Require explicit both-board confirmation once per BLE session and wait for `POWER18|ENABLED` before negotiating authenticated Fast handover; never fabricate success.
+- Gate media staging on `MEDIA|READY`, visibly report explicit bypass, fail on synchronization error, and send `MEDIA OFF` with restoration wait after completion/failure. Declining confirmation allows an explicitly labeled current-mode transfer; radio safety approval is never automatic.
+- When exiting Auto for a manual profile, wait for authenticated `AUTO|OFF` before issuing a manual `PROFILE` command. Correct the old menu labels without introducing a WebView screen or altering the photo/voice presentation.
+- Preserve all `web/`, SX1278 firmware, ARQ, BLE companion, native encryption/codec, GATT pairing and UI files other than the requested radio menu. Host RF/security and standalone Kotlin tests pass; no Android SDK, APK or physical phone was available. This is a source release candidate.
+
 ## v3.0.1-rc.1 — Native Android UI restoration and LoRa BLE protocol port
 
 - Restore original Android `MainActivity` launcher; remove v3.0.0 alternate WebView, bundled HTML/JS/CSS and USB OTG screen. Original `PremiumUi.kt` and BLE GATT/Keystore code stay byte-identical.

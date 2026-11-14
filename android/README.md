@@ -1,6 +1,6 @@
 # OffGrid Messenger Android — original native app, LoRa transport
 
-**v3.0.1-rc.1 (source candidate)**. The original native Android Compose application is again the **only launcher**. The experimental v3.0.0 WebView UI, alternate connection picker, and bundled HTML/CSS/JS screen have been removed. The original `PremiumUi.kt`, chat layout and theme, icons, native in-app camera, BLE pairing screens, background service, and encrypted local history are unchanged.
+**v3.0.2-rc.1 (source candidate, based on v3.0.1)**. The original native Android Compose application is again the **only launcher**. The experimental v3.0.0 WebView UI, alternate connection picker, and bundled HTML/CSS/JS screen have been removed. The original native chat layout, theme, icons, camera, BLE pairing screens, background service and encrypted history remain unchanged. **Only the radio dropdown text/options are updated to the real LoRa modes**; no alternative chat UI was introduced.
 
 This release changes the underlying transport and protocol to interoperate with the **current OffGrid LoRa browser** without adopting its UI.
 
@@ -12,18 +12,22 @@ The phone still pairs through the **original Android BLE GATT client** (`BleNode
 
 Keep a backup of the working rc.4 binary, and do not erase NVS when flashing the BLE companion. It contains the same LoRa/SX1278 modulation, ARQ source, USB browser protocol and manual/automatic radio switching. Only the BLE bulk command allowlist, authenticated bulk forwarding and BLE notification queue behavior were extended (already present in the preceding v3.0.0 source release). Physical BLE GATT media behavior has not yet been tested on a phone.
 
-## Original interface: no visual changes
+## Original interface: same chat UI; corrected radio menu only
 
-The user still interacts with the native Compose chat application exactly as before: same chat list, composer, + photo picker, camera, push/tap microphone behavior, player, photo viewer, receipt ticks, dialogs, encrypted history and notification preferences. Old radio-rate UI labels have LoRa command mappings **beneath** the same controls:
+The original native Compose chat, list, composer, photo picker, microphone, recorder/player, receipts, history and pairing controls remain unchanged. The **existing radio dropdown** is corrected to show exactly the LoRa settings rather than the old ESP-NOW LR250/LR500 labels:
 
-| Existing button value | LoRa command |
-| --- | --- |
-| AUTO | `AUTO ON` |
-| SPEED or LR500 | `PROFILE LOW` (Fast, SF7/BW500) |
-| LR250 | `PROFILE BALANCED` (SF7/BW250) |
-| RANGE | `PROFILE MAX` (SF9/BW125) |
+| Menu choice | Authenticated BLE command | Radio setup |
+| --- | --- | --- |
+| Auto (adaptive) | `AUTO ON` | Dynamically chooses Fast/Balanced/Range |
+| Fast | `PROFILE LOW` | SF7/BW500 nominal +18 dBm |
+| Balanced | `PROFILE BALANCED` | SF7/BW250 +10 dBm when manual |
+| Max Range | `PROFILE MAX` | SF9/BW125 nominal +18 dBm |
 
-This deliberately retains the old visible rate-label strings. The actual applied profile comes from firmware `LINK|...|PROFILE=...` records. Fast and Max at nominal +18 dBm require separate **hardware/power authorization**; this native app does *not* silently send `POWER18 VERIFIED` merely because a mode button is tapped. Physical USB authorization / a verified operator workflow is required. If the firmware refuses high power, the app reports it instead of faking synchronization.
+The Android screen reads **actual `PROFILE=` and `AUTO=` fields** from the firmware's `LINK` telemetry. In Auto, it displays the applied modulation and highlights Auto. It no longer equates `LR 250/500 kbps` with a LoRa RF mode; those are ESP-NOW PHY labels.
+
+**One-time-per-BLE-session RF safety confirmation:** Selecting Auto, Fast or Max Range, or sending photo/voice from Balanced, asks you to verify **both** ESP32 radio boards' antennas, stable power supplies and local RF permissions before requesting nominal 18 dBm. After confirmation the app sends `POWER18 VERIFIED`, waits for the firmware's `POWER18|ENABLED` response, then requests the authenticated mode switch. The receiving radio follows automatically; a second phone tap is not required. If confirmation is declined during media, the app explicitly sends at the current profile instead of pretending it boosted.
+
+Photo/voice: `MEDIA ON` → wait for `MEDIA|READY|MODE=LOW` → send encrypted bulk data → `MEDIA OFF` → wait for `MEDIA|RESTORED|MODE=...` or an explicit safe bypass/restore error. No in-flight data is intentionally staged during an unconfirmed transition. Firmware may decline Fast when the peer is stale, busy or link margin is insufficient; the app reports that and keeps the working RF mode. No firmware/web runtime source changed in this update.
 
 ## Protocol parity with LoRa web v1.10
 
@@ -50,7 +54,7 @@ sh android/tests/run_native_lora_tests.sh
 sh firmware/tests/run-host-tests.sh
 ```
 
-The UI is verified byte-for-byte at source level against the original v3.0.0 preserved native Compose UI, not from device screenshots.
+The native UI is compared against the preserved original at source level: **only the requested LoRa radio dropdown text/choices differ**. This is not an Android-device screenshot or APK validation.
 
 ## Hardware acceptance test
 
@@ -59,4 +63,4 @@ The UI is verified byte-for-byte at source level against the original v3.0.0 pre
 3. Send text **Android→web** and **web→Android**, check genuine delivery/read ticks, duplicate suppression, wrong-key rejection and reconnection.
 4. Send a 48 KiB photo and 40 KiB voice in both directions; verify byte limits, image detail, audio playback, media progress and SHA validation.
 5. Test the existing manual/Auto RF control options and media Fast/restore on two boards, paying attention to RF power authorization.
-6. Run repeated short texts during a photo, background/foreground, disconnect/reconnect and a 30-minute mixed-media soak. Record failures and BLE GATT diagnostics before treating v3.0.1 as stable.
+6. Run repeated short texts during a photo, background/foreground, disconnect/reconnect and a 30-minute mixed-media soak. Record `POWER18`, `MEDIA`, `PROFILE`, `LINK` and BLE GATT diagnostics before treating v3.0.2 as stable.
