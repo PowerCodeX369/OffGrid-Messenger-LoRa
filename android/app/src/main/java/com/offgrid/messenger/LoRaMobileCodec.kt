@@ -17,6 +17,12 @@ object LoRaMobileCodec {
         require(key.size==32){"Pairing key must be 32 bytes"}
         return key
     }
+    /** Require exact authenticated feature tokens, not partial substring matches. */
+    fun supportsBleBulkCaps(line:String):Boolean {
+        val fields=line.split('|').toSet()
+        return line.startsWith("CAPS|") && setOf("FAMILY=LORA","PROTO=2","MEDIA=1","BULK=1")
+            .all {it in fields}
+    }
     class LineWriter {
         private val pending=ByteArrayOutputStream()
         fun append(bytes:ByteArray):List<String>{

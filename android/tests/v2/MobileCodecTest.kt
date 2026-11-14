@@ -12,6 +12,14 @@ fun main(){
   if(bad=="A".repeat(64))continue // 64 A's are valid hex
   check(runCatching{LoRaMobileCodec.parsePairingKey(bad)}.isFailure)
  }
+ check(LoRaMobileCodec.supportsBleBulkCaps("CAPS|FAMILY=LORA|PROTO=2|RADIO=SX1278|MEDIA=1|BULK=1"))
+ for(bad in listOf("CAPS|FAMILY=LORA|PROTO=2|MEDIA=0|BULK=1",
+                    "CAPS|FAMILY=LORA|PROTO=2|MEDIA=1|FAKEBULK=1",
+                    "CAPS|FAMILY=LORA|PROTO=2|MEDIA=1|BULK=0",
+                    "CAPS|FAMILY=ESP_NOW|PROTO=2|MEDIA=1|BULK=1",
+                    "NOT_CAPS|FAMILY=LORA|PROTO=2|MEDIA=1|BULK=1")){
+  check(!LoRaMobileCodec.supportsBleBulkCaps(bad))
+ }
  val lines=LoRaMobileCodec.LineWriter()
  check(lines.append("BULKBEGIN ABC 2048 DATA\nBULKCH".toByteArray())==listOf("BULKBEGIN ABC 2048 DATA"))
  check(lines.append("UNK ABC 0 0011\nSTATUS\n".toByteArray())==listOf("BULKCHUNK ABC 0 0011","STATUS"))

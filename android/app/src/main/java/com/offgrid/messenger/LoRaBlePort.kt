@@ -31,7 +31,7 @@ class LoRaBlePort(
         }
     },{ response ->
         if(!capable && response.startsWith("CAPS|")) {
-            if(response.contains("BULK=1") && response.contains("MEDIA=1") && response.contains("FAMILY=LORA")) {
+            if(LoRaMobileCodec.supportsBleBulkCaps(response)) {
                 capable=true
                 onOpen?.invoke(true,"");onOpen=null
                 for(record in early)onBytes((record+"\n").toByteArray(Charsets.US_ASCII))
