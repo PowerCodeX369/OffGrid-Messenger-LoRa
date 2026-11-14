@@ -1,3 +1,11 @@
+## Android universal app 3.0.0-rc.1 (source candidate; pending Android SDK and two-radio verification)
+
+- New Android launcher uses the unchanged v1.10 web HTML/CSS/JS (plus origin-scoped Web Serial bridge), keeping exact text/photo/voice/receipt/media-queue/RF UI parity.
+- Native Android USB host implementation works with ESP32-C3 native USB Serial/JTAG and existing v1.8.0-rc.4 firmware without reflashing. Other USB-UART adapters require a driver.
+- Authenticated NimBLE transport reuses the preserved Android client; local pairing key is encrypted with AndroidKeyStore; companion BLE firmware opt-in adds LoRa bulk media and profile commands without exporting keys.
+- Legacy ESP-NOW Android `MainActivity` remains present; no radio/ARQ/crypto/media transport rewrite.
+- Host C, Node, Kotlin/JVM and existing web protocol checks passed. Android/ESP-IDF full builds and phone/radio acceptance tests **have not run**.
+
 # Changelog
 
 ## v1.10.0-rc.1 — security / stability receive hardening (2026-11-13)

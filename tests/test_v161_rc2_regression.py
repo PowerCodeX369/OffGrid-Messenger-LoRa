@@ -15,13 +15,21 @@ for name in [
     'firmware/components/offgrid_arq/include/og_sr_usb.h',
     'firmware/components/offgrid_sx1278/offgrid_sx1278.c',
     'firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c',
-    'firmware/main/ble_bridge.c',
     'web/lora_receipts.js',
     'web/lora_scheduler.js',
     'web/lora_benchmark.js',
     'web/lora_delivery.js'
 ]:
     assert new(name)==old(name),'v1.6.1 known-working data path changed: '+name
+# BLE gained an authenticated bulk serial bridge for Android v2.0.
+# Keep the original GATT authentication and packet parser exactly as before.
+old_ble=old('firmware/main/ble_bridge.c').decode()
+new_ble=new('firmware/main/ble_bridge.c').decode()
+def same_ble(start,end):
+    section=lambda code:code[code.index(start):code.index(end,code.index(start))]
+    assert section(new_ble)==section(old_ble), 'BLE auth/GATT internals changed: '+start
+same_ble('static int access_cb(', 'static int notify_access(')
+same_ble('static int gap_cb(', 'static void advertise(void){')
 # Only the eight-line browser USB batching constant and its explanation
 # may change; the packet format, sequence/CRC and firmware remain identical.
 import re
@@ -47,7 +55,13 @@ baseline=old('firmware/main/main.c').decode()
 section=lambda x,start,end:x[x.index(start):x.index(end,x.index(start))]
 for a,b in [('static void queue_data(', 'static void process_command('),
             ('static bool radio_hmac(', 'static void derive_radio_key(')]:
-    assert section(src,a,b)==section(baseline,a,b),f'firmware {a} path modified'
+    actual=section(src,a,b)
+    if a=='static bool radio_hmac(':
+        actual=actual.replace("""    /* USB remains the original v1.8 transport. Authenticated LoRa BLE clients
+     * also need the exact same bulk status and RXBCHUNK ciphertext records. */
+    offgrid_ble_publish(line);
+""",'')
+    assert actual==section(baseline,a,b),f'firmware {a} data path modified'
 web=new('web/app.js').decode()
 assert 'PROFILE=AUTO3_ONE_CLICK' in src
 assert 'PROFILES=3|SYNC=ONE_CLICK' in src
@@ -57,4 +71,4 @@ assert "writeLine('POWER18 VERIFIED')" in web and 'writeLine(`PROFILE ${mode}`)'
 assert 'PROFILE|PEER_REQUEST' in src and 'PROFILE|PEER_BUSY' in src
 assert 'OG_TYPE_PROFILE_REJECT' in src and 'OG_TYPE_AUTO_CTRL' in src and 'auto_service();' in src
 assert 'radio_hmac(bytes,plain,digest)' in src
-print('PASS: v1.6.1 ARQ/radio driver/crypto/receipts unchanged; browser USB batch widened only; auto scheduler isolated')
+print('PASS: v1.6.1 ARQ/SX1278/crypto/receipt baseline unchanged, BLE GATT auth protected, mobile bulk isolated')

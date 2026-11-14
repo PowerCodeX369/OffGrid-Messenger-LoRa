@@ -1,3 +1,5 @@
+> **Android universal LoRa app (new source candidate):** The `android/` project now includes an offline Android WebView showing the exact v1.10 LoRa web messenger (photos, Opus voice, encrypted receipts, media controls, manual/Auto RF), plus native USB OTG and authenticated BLE adapters. The original ESP-NOW Android activity is preserved. **Existing v1.8.0-rc.4 firmware works via USB without reflashing; BLE photo/voice requires the optional companion firmware flashed onto both boards.** This environment has not built an APK or ESP-IDF binaries. See [Android setup](android/README.md) and [phone acceptance plan](docs/ANDROID_UNIVERSAL_ACCEPTANCE.md). Battery optimization remains after Android.
+
 # OffGrid Messenger LoRa
 
 **v1.10.0-rc.1 — WEB-ONLY SECURITY/STABILITY HARDENING on the user-confirmed-working rc.6 release.**

@@ -50,6 +50,14 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
     firmware/components/offgrid_arq/og_sr_usb.c -o "$bridge_bin"
 "$bridge_bin"
 rm -f "$bridge_bin"
+ble_mobile_bin=/tmp/offgrid-ble-mobile-policy-$$
+cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main firmware/tests/test_ble_mobile_bulk.c -o "$ble_mobile_bin"
+"$ble_mobile_bin"
+rm -f "$ble_mobile_bin"
+sh android/tests/v2/run-tests.sh
+node --check android/app/src/main/assets/www/android_serial.js
+node android/tests/test_android_serial.cjs
+python3 tests/test_android_v2.py
 node --check web/lora_bulk.js
 node firmware/tests/test-lora-bulk.cjs
 node --check web/lora_scheduler.js

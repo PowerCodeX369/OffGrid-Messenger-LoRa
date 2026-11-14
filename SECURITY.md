@@ -1,3 +1,10 @@
+## Android 3.0.0-rc.1 source candidate: security boundaries
+
+- Local `WebViewAssetLoader` origin, origin-checked `WebViewCompat` native bridge, no Android `INTERNET` permission, and external WebView navigation blocked. This is a protection layer, **not** a substitute for Android on-device testing.
+- Radio contents stay encrypted with existing web AES-256-GCM and authenticated by existing OGM2 HMAC. Android BLE key is additionally encrypted at rest using AndroidKeyStore; GATT `KEYGET`/`KEYSET` remain denied and physical USB key provisioning is required.
+- For BLE bulk media the **new companion firmware is mandatory** and is not ESP-IDF-compiled or RF-tested here. The initial BLE HMAC challenge authenticates the connection only: active interception of unencrypted GATT control traffic and persistent RF-command replay across resets remain unqualified threats. Secure BLE pairing/transport-layer enforcement and explicit per-command authorization need a further audit.
+- Android and LoRa firmware sources have only undergone host simulations and source review; do not deploy as security-qualified without platform builds and physical phone/radio tests.
+
 # v1.10 browser receive hardening
 
 The browser now serializes authenticated work by peer/transfer ID before

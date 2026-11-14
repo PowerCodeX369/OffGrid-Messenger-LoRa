@@ -25,7 +25,7 @@ assert "c->type==CMD_MEDIA_ON" in fw and "c->type==CMD_MEDIA_OFF" in fw
 assert 'og_auto_fresh(&auto_policy.local' in fw and 'og_auto_fresh(&auto_policy.remote' in fw
 assert 'profile_start_offer(OG_MODE_LOW,false,false,true)' in fw
 assert 'MEDIA=1' in fw and 'PHOTO=1|VOICE=1' in fw
-assert "!strcmp(line,\"MEDIA ON\")" in fw and 'if(ble){output("MEDIA|ERROR|USB_ONLY' in fw
+assert "!strcmp(line,\"MEDIA ON\")" in fw and 'MEDIA|ERROR|USB_ONLY' not in fw
 assert 'OG_SR_MAX_TRANSFER' in fw and 'BULKCHUNK' in fw
 assert 'MAX' in (root/'firmware/main/lora_modes.h').read_text()
 assert 'media_restore_requested' in fw and 'media_service();' in fw
