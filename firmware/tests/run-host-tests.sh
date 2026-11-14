@@ -54,10 +54,9 @@ ble_mobile_bin=/tmp/offgrid-ble-mobile-policy-$$
 cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main firmware/tests/test_ble_mobile_bulk.c -o "$ble_mobile_bin"
 "$ble_mobile_bin"
 rm -f "$ble_mobile_bin"
-sh android/tests/v2/run-tests.sh
-node --check android/app/src/main/assets/www/android_serial.js
-node android/tests/test_android_serial.cjs
-python3 tests/test_android_v2.py
+# v3.0.1 restores the original native Compose app. The v3.0.0 WebView
+# adapter and its tests are intentionally retired; test native BLE/OGM4 instead.
+sh android/tests/run_native_lora_tests.sh
 node --check web/lora_bulk.js
 node firmware/tests/test-lora-bulk.cjs
 node --check web/lora_scheduler.js

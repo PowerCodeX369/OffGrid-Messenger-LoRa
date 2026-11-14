@@ -50,16 +50,22 @@ assert 'ARQ=1' in main and 'ARQ=1' in web
 assert 'BULKBEGIN' in main and 'BulkLink' in web
 assert 'AUTO ON/OFF,MEDIA ON/OFF,POWER18 VERIFIED' in main
 assert 'profileTransition' in web and 'showProfileDialog' in web
-# Source copied to Android is truly unchanged against the imported ESP-NOW
-# repository. The pinned reference hash list is checked during packaging.
+# Android's original Compose presentation and BLE GATT implementation remain
+# frozen; its LoRa-native transport/codec may now legitimately change.
 assert (root/'docs/ANDROID_FROZEN_SHA256.txt').exists()
-for line in (root/'docs/ANDROID_FROZEN_SHA256.txt').read_text().splitlines():
-    if not line or line.startswith('#'): continue
-    digest,path=line.split('  ',1)
-    # v2.0 adds an Android launcher and WebKit dependency. The legacy Android
-    # Kotlin UI and BLE implementation remain byte-identical for ESP-NOW.
-    if path in ('README.md','app/build.gradle.kts','app/src/main/AndroidManifest.xml'):
-        continue
+protected=(
+ 'app/src/main/java/com/offgrid/messenger/PremiumUi.kt',
+ 'app/src/main/java/com/offgrid/messenger/BleNodeClient.kt',
+ 'app/src/main/java/com/offgrid/messenger/BleSessionHolder.kt',
+ 'app/src/main/java/com/offgrid/messenger/SecureKeyStore.kt',
+ 'app/src/main/java/com/offgrid/messenger/EncryptedHistory.kt',
+ 'app/src/main/java/com/offgrid/messenger/OffGridNotifications.kt',
+)
+hashes={p:h for h,p in (row.split('  ',1) for row in
+ (root/'docs/ANDROID_FROZEN_SHA256.txt').read_text().splitlines() if '  ' in row)}
+for path in protected:
     actual=hashlib.sha256((root/'android'/path).read_bytes()).hexdigest()
-    assert digest==actual, f'Original ESP-NOW Android file changed: {path}'
-print('PASS: isolated LoRa, no Wi-Fi runtime, original ESP-NOW Android source preserved')
+    assert actual==hashes[path],f'Original native Android UI/BLE source changed: {path}'
+assert not (root/'android/app/src/main/java/com/offgrid/messenger/LoRaActivity.kt').exists()
+assert 'LoRaNativeBulk' in (root/'android/app/src/main/java/com/offgrid/messenger/MainActivity.kt').read_text()
+print('PASS: isolated LoRa, no Wi-Fi runtime, original native Compose UI/BLE GATT preserved')
