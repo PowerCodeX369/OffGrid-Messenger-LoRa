@@ -324,6 +324,9 @@ static void arq_emit_usb(void *ctx,const char *line){
     if(!line)return;
     fwrite(line,1,strlen(line),stdout);
     fputc('\n',stdout);
+    /* USB remains the original v1.8 transport. Authenticated LoRa BLE clients
+     * also need the exact same bulk status and RXBCHUNK ciphertext records. */
+    offgrid_ble_publish(line);
 }
 static uint32_t arq_now_ms(void *ctx){(void)ctx;return (uint32_t)millis();}
 static const og_arq_io_t arq_io={.context=NULL,.radio_tx=arq_send_radio,
@@ -1331,16 +1334,15 @@ static void parse_line(const char *line,bool ble) {
         output("CAPS|FAMILY=LORA|PROTO=2|SX1278=1|PROFILE=AUTO3_ONE_CLICK|ARQ=1|BULK=1|TEXT=1|PHOTO=1|VOICE=1|WIFI=0|BLE=1\n");return;
     }
     if(!strcmp(line,"POWER18 VERIFIED")){
-        if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
-        /* Queue to radio worker; cross-task state is never mutated in USB. */
+        /* BLE calls reach this handler only after challenge/response HMAC auth.
+         * The browser UI requires an explicit both-board PA18 confirmation. */
+        /* Queue to radio worker; cross-task state is never mutated in BLE/USB. */
         c.type=CMD_HIGH_PA_ON;queue_command(&c);return;
     }
     if(!strcmp(line,"POWER18 OFF")){
-        if(ble){output("POWER18|ERROR|PHYSICAL_USB_ONLY\n");return;}
         c.type=CMD_HIGH_PA_OFF;queue_command(&c);return;
     }
     if(!strcmp(line,"MEDIA ON")||!strcmp(line,"MEDIA OFF")){
-        if(ble){output("MEDIA|ERROR|USB_ONLY\n");return;}
         c.type=!strcmp(line,"MEDIA ON")?CMD_MEDIA_ON:CMD_MEDIA_OFF;
         queue_command(&c);return;
     }

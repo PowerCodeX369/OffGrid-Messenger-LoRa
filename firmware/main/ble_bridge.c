@@ -19,6 +19,7 @@
 #include "services/gatt/ble_svc_gatt.h"
 #include "ble_auth_psa.h"  /* PSA HMAC-SHA256, for Mbed TLS 4 in ESP-IDF 6.1. */
 #include "ble_binary.h"
+#include "ble_command_policy.h"
 #define MAX_LINE 512
 static const ble_uuid128_t svc=BLE_UUID128_INIT(0x01,0x0b,0x03,0x26,0x80,0x4e,0x41,0xb6,0xba,0x48,0xd5,0x7b,0x04,0xd9,0x22,0x7b);
 static const ble_uuid128_t write_uuid=BLE_UUID128_INIT(0x02,0x0b,0x03,0x26,0x80,0x4e,0x41,0xb6,0xba,0x48,0xd5,0x7b,0x04,0xd9,0x22,0x7b);
@@ -47,7 +48,16 @@ static void push(const char *s,bool secured){
  size_t n=strnlen(s,MAX_LINE-2);if(n==0||n>=MAX_LINE-2)return;
  line_t line={0};memcpy(line.text,s,n);
  if(line.text[n-1]!='\n'){line.text[n++]='\n';line.text[n]=0;}
- (void)xQueueSend(outbox,&line,0);
+ /* RXBCHUNK is a whole-file ciphertext stream. A dropped GATT notification
+  * corrupts the transfer even when the RF bitmap ACK succeeded. Buffer a full
+  * 7,168-byte receive transfer (45 chunks) and apply bounded backpressure. */
+ const bool important = !strncmp(s,"RXB",3)||!strncmp(s,"BULK",4);
+ if(xQueueSend(outbox,&line,important?pdMS_TO_TICKS(150):0)!=pdTRUE && important){
+  /* Never pretend a complete authenticated RF transfer reached Android if
+   * one of its BLE ciphertext records could not enter the GATT queue. */
+  ESP_LOGW("offgrid-ble","BLE media queue backpressure; disconnecting to force recovery");
+  if(conn_handle!=BLE_HS_CONN_HANDLE_NONE)ble_gap_terminate(conn_handle,0x13);
+ }
 }
 void offgrid_ble_publish(const char *s){push(s,true);}
 void offgrid_ble_set_key(const uint8_t key[32],bool present){
@@ -58,11 +68,6 @@ void offgrid_ble_set_key(const uint8_t key[32],bool present){
 static void challenge_new(void){
  esp_fill_random(nonce,16);failures=0;auth=false;partial_n=0;
  char proof[33],line[48];ascii_hex(nonce,16,proof);snprintf(line,sizeof(line),"CHAL|%s",proof);push(line,false);
-}
-static bool allow(const char *s){
- return !strcmp(s,"STATUS")||!strncmp(s,"MSGHEX ",7)||!strncmp(s,"APPACK ",7)||!strncmp(s,"APPACKB ",8)||!strncmp(s,"READ ",5)||
-        !strcmp(s,"RATE AUTO")||!strcmp(s,"RATE SPEED")||!strcmp(s,"RATE RANGE")||
-        !strcmp(s,"RATE LR500")||!strcmp(s,"RATE LR250");
 }
 static void complete_line(char *line){
  if(!strcmp(line,"AUTH?")){challenge_new();return;}
@@ -85,9 +90,9 @@ static void complete_line(char *line){
   push("BINCAP|0|0",true);return;
  }
  if(!strcmp(line,"CAPS?")){
-  push("CAPS|FAMILY=LORA|PROTO=2|RADIO=SX1278|TEXT=1|MEDIA=0|PROFILES=1",true);return;
+  push("CAPS|FAMILY=LORA|PROTO=2|RADIO=SX1278|TEXT=1|MEDIA=1|PROFILES=3|BULK=1|AUTORF=1",true);return;
  }
- if(!allow(line)){push("ERROR|BLE_DENIED",false);return;}
+ if(!offgrid_ble_allows_command(line)){push("ERROR|BLE_DENIED",false);return;}
  offgrid_ble_command_t item={0};
  item.kind=OFFGRID_BLE_COMMAND_TEXT;
  strncpy(item.data.text,line,OFFGRID_BLE_LINE_MAX-1);
@@ -186,8 +191,18 @@ static void sender(void *arg){
    uint16_t capacity=att_mtu>3?att_mtu-3:20;
    if(capacity>180)capacity=180;
    uint16_t count=(uint16_t)((total-done)<capacity?(total-done):capacity);
-   struct os_mbuf *m=ble_hs_mbuf_from_flat(line.text+done,count);
-   if(!m||ble_gatts_notify_custom(conn_handle,notify_handle,m))break;
+   bool sent=false;
+   for(unsigned attempt=0;attempt<12 && conn_handle!=BLE_HS_CONN_HANDLE_NONE;attempt++){
+    struct os_mbuf *m=ble_hs_mbuf_from_flat(line.text+done,count);
+    if(m && ble_gatts_notify_custom(conn_handle,notify_handle,m)==0){sent=true;break;}
+    /* A congested BLE stack must not silently truncate an RXBCHUNK line. */
+    vTaskDelay(pdMS_TO_TICKS(10)+1);
+   }
+   if(!sent){
+    ESP_LOGW("offgrid-ble","BLE notification backpressure; terminating incomplete link");
+    if(conn_handle!=BLE_HS_CONN_HANDLE_NONE)ble_gap_terminate(conn_handle,0x13);
+    break;
+   }
    done+=count;
    /* One tick is enough to yield to NimBLE; the old 13ms+1 tick
     * penalized EVERY ATT fragment. Keep a yield to avoid flooding buffers. */
@@ -208,7 +223,7 @@ void offgrid_ble_init(const uint8_t mac[6],const uint8_t key[32],bool present){
   ESP_LOGE("offgrid-ble","PSA crypto initialization failed: %ld",(long)psa_status);
   return;
  }
- inbox=xQueueCreate(16,sizeof(offgrid_ble_command_t));outbox=xQueueCreate(32,sizeof(line_t));
+ inbox=xQueueCreate(16,sizeof(offgrid_ble_command_t));outbox=xQueueCreate(64,sizeof(line_t));
  if(!inbox||!outbox){ESP_LOGE("offgrid-ble","No BLE queues");return;}
  if(nimble_port_init()!=ESP_OK){ESP_LOGE("offgrid-ble","NimBLE init failed");return;}
  ble_svc_gap_init();ble_svc_gatt_init();ble_svc_gap_device_name_set(name);
