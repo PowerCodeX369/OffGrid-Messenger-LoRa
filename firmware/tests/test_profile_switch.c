@@ -5,7 +5,7 @@
 #include <string.h>
 static const uint8_t alice[6]={0x14,0x63,0x93,0xC2,0xF3,0x3C};
 int main(void){
-    for(uint8_t mode=OG_MODE_LOW;mode<=OG_MODE_MAX;mode++){
+    for(uint8_t mode=OG_MODE_LOW;mode<=OG_MODE_ULTRA;mode++){
         og_frame_t request=og_profile_control_frame(OG_TYPE_PROFILE_OFFER,mode,alice,25u,0xFE129411u);
         assert(og_wire_valid(&request,og_wire_length(&request)));
         assert(og_profile_control_valid(&request));
@@ -28,7 +28,7 @@ int main(void){
     }
     /* Temporary media mode override is a separately authenticated control
      * intent. It must not be mistaken for permanent manual or Auto state. */
-    for(uint8_t mode=OG_MODE_LOW;mode<=OG_MODE_MAX;mode++){
+    for(uint8_t mode=OG_MODE_LOW;mode<=OG_MODE_ULTRA;mode++){
         og_frame_t media=og_profile_control_frame(OG_TYPE_PROFILE_OFFER,mode,alice,25u,0xFE129411u);
         media.data[5]|=OG_PROFILE_MEDIA_FLAG;
         assert(og_profile_control_valid(&media));
@@ -45,8 +45,8 @@ int main(void){
     assert(og_wire_valid(&reject,og_wire_length(&reject)));
     assert(og_profile_control_valid(&reject));
     reject.data[5]=0;assert(!og_profile_control_valid(&reject));
-    assert(!og_profile_mode_valid(0) && !og_profile_mode_valid(4));
+    assert(!og_profile_mode_valid(0) && !og_profile_mode_valid(5));
     assert(og_mode_parse("EXPERIMENTAL")==0);
-    puts("PASS: authenticated profile payload policy, one-click peer, busy response, 3 modes");
+    puts("PASS: authenticated profile payload policy, one-click peer, busy response, 4 modes");
     return 0;
 }

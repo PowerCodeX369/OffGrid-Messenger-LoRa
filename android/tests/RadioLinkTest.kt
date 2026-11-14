@@ -9,6 +9,10 @@ fun main() {
     check(balanced.rateMode=="BALANCED" && balanced.phyLabel=="SF7 / BW250")
     val range=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-117|PHY=0|PROFILE=MAX|AUTO=0")!!
     check(range.rateMode=="RANGE" && range.phyLabel=="SF9 / BW125")
+    val ultra=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-130|PHY=0|PROFILE=ULTRA|AUTO=0")!!
+    check(ultra.rateMode=="ULTRA" && ultra.phyLabel=="SF12 / BW125" && ultra.modeLabel=="Ultra Long Range")
+    val autoUltra=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-125|PROFILE=ULTRA|AUTO=1")!!
+    check(autoUltra.rateMode=="AUTO" && autoUltra.activeProfile=="ULTRA" && autoUltra.phyLabel=="SF12 / BW125")
     val auto=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-85|PHY=0|PROFILE=LOW|AUTO=1")!!
     check(auto.rateMode=="AUTO" && auto.modeLabel=="Auto (adaptive)" && auto.phyLabel=="SF7 / BW500")
     val legacy=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-58|PHY=0.25|MODE=LR250|PHYMODE=LR250")!!
@@ -25,11 +29,12 @@ fun main() {
     check(absent.rssiDbm==null)
     check(RadioLink.parse("READY|node")==null)
     check(RadioLink.parse("LINK||RSSI=-50")==null)
-    check(RadioLink.choices==listOf("AUTO","FAST","BALANCED","RANGE"))
+    check(RadioLink.choices==listOf("AUTO","FAST","BALANCED","RANGE","ULTRA"))
     check(RadioLink.command("FAST")=="PROFILE LOW")
     check(RadioLink.command("BALANCED")=="PROFILE BALANCED")
     check(RadioLink.command("RANGE")=="PROFILE MAX")
     check(RadioLink.command("AUTO")=="AUTO ON")
+    check(RadioLink.command("ULTRA")=="PROFILE ULTRA" && RadioLink.requiresHighPower("ULTRA"))
     check(RadioLink.command("LR250")==null && RadioLink.command("LR500")==null)
     check(!RadioLink.requiresHighPower("BALANCED"))
     check(RadioLink.requiresHighPower("FAST") && RadioLink.requiresHighPower("RANGE") && RadioLink.requiresHighPower("AUTO"))

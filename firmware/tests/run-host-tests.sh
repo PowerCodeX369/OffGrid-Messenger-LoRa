@@ -50,6 +50,22 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
     firmware/components/offgrid_arq/og_sr_usb.c -o "$bridge_bin"
 "$bridge_bin"
 rm -f "$bridge_bin"
+policy_bin=/tmp/offgrid-ultra-policy-$$
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -Ifirmware/main/ultra firmware/tests/test_ultra_policy.c \
+    firmware/main/ultra/og_ultra_policy.c -o "$policy_bin"
+"$policy_bin"
+rm -f "$policy_bin"
+ultra_bin=/tmp/offgrid-ultra-arq-$$
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -Ifirmware/components/offgrid_arq/include -Ifirmware/main/ultra \
+    firmware/tests/test_ultra_arq.c \
+    firmware/components/offgrid_arq/og_arq_bridge.c \
+    firmware/components/offgrid_arq/og_sr.c \
+    firmware/components/offgrid_arq/og_sr_usb.c \
+    firmware/main/ultra/og_ultra_policy.c -o "$ultra_bin"
+"$ultra_bin"
+rm -f "$ultra_bin"
 ble_mobile_bin=/tmp/offgrid-ble-mobile-policy-$$
 cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main firmware/tests/test_ble_mobile_bulk.c -o "$ble_mobile_bin"
 "$ble_mobile_bin"
@@ -78,6 +94,7 @@ node firmware/tests/test-lora-scheduler.cjs
 node firmware/tests/test-lora-receipts.cjs
 python3 tests/test_rc2_send_path.py
 python3 tests/test_boundaries.py
+python3 tests/test_ultra_end_to_end_contract.py
 python3 tests/test_v15_profile.py
 python3 tests/test_v161_rc2_regression.py
 python3 tests/test_v17_adaptive.py

@@ -21,7 +21,7 @@ assert 'OG_TYPE_RADIO_ACK' in main and 'OG_TYPE_DELIVERED' in main
 assert 'OG_TYPE_READ' in main and 'PSA_ALG_HMAC(PSA_ALG_SHA_256)' in main
 assert 'ESP-NOW</span>' not in ui and 'ESP-NOW channel 6' not in web
 assert "writeLine('RATE '" not in web
-assert "$('attachments').disabled=!ready" in web and "$('voiceButton').disabled=!ready" in web
+assert "$('attachments').disabled=!ready||textOnly" in web and "$('voiceButton').disabled=!ready||textOnly" in web
 assert 'OffGridLoRaMedia' in web and 'Media.Reassembler' in web
 assert 'MEDIA=1' in main and 'MEDIA=1' in web
 assert 'urgentReceipts' in web and 'runUrgentReceipts' in web
@@ -45,7 +45,7 @@ assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
 assert "1.8.0-rc.4" in main and "1.10.0-rc1-lora" in web
-assert 'PROFILES=3' in main and 'PROFILES=3' in web and 'SYNC=ONE_CLICK' in main and 'SYNC=ONE_CLICK' in web
+assert 'PROFILES=4' in main and 'PROFILES=4' in web and 'SYNC=ONE_CLICK' in main and 'SYNC=ONE_CLICK' in web
 assert 'ARQ=1' in main and 'ARQ=1' in web
 assert 'BULKBEGIN' in main and 'BulkLink' in web
 assert 'AUTO ON/OFF,MEDIA ON/OFF,POWER18 VERIFIED' in main

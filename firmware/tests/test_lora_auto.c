@@ -72,7 +72,7 @@ int main(void){
     a.type=OG_TYPE_AUTO_METRIC;a.length=8;a.data[5]=OG_MODE_MAX;
     a.data[6]=1;a.data[7]=2;
     assert(og_wire_valid(&a,og_wire_length(&a)));
-    a.data[5]=4;assert(!og_wire_valid(&a,og_wire_length(&a)));
+    a.data[5]=5;assert(!og_wire_valid(&a,og_wire_length(&a)));
     assert(OG_AUTO_FAST_DOWN_RSSI > OG_AUTO_FAST_RANGE_RSSI);
     assert(OG_AUTO_FAST_RANGE_RSSI >= OG_AUTO_BAL_DOWN_RSSI);
     assert(OG_AUTO_FAST_UP_RSSI>OG_AUTO_FAST_DOWN_RSSI);

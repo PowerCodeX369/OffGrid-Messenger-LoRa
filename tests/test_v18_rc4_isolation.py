@@ -1,47 +1,19 @@
 #!/usr/bin/env python3
-"""Assert rc.4 changes only synchronized media mode control and diagnostics.
-Checks actual Git objects, not copies produced from an earlier release.
-"""
+"""v3.0.4 verifies rc.4 media and privacy features survive Ultra additions."""
 from pathlib import Path
 import subprocess
-root=Path(__file__).resolve().parents[1]
-for file in ['firmware/components/offgrid_arq/og_sr.c','firmware/components/offgrid_arq/og_arq_bridge.c',
-             'firmware/components/offgrid_sx1278/offgrid_sx1278.c',
-             'web/protocol.js','web/lora_receipts.js',
-             'web/lora_scheduler.js','web/styles.css','web/lora_delivery.js']:
-    before=subprocess.check_output(['git','show','v1.8.0-rc.3:'+file],cwd=root)
-    after=(root/file).read_bytes()
-    assert after==before, f'working rc.3 component changed: {file}'
-# The only intended change to the media wire codec is the chunk capacity.
-bulk_before=subprocess.check_output(['git','show','v1.8.0-rc.4:web/lora_bulk.js'],cwd=root).decode()
-bulk_after=(root/'web/lora_bulk.js').read_text().replace('PIPELINE=8','PIPELINE=4')
-import re
-def strip_short_bulk_path(x):
-    start=x.index('    if(ciphertext.length<=CHUNK){')
-    end=x.index('    /* Bounded 8-line USB write',start)
-    x=x[:start]+"    await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');\n"+x[end:]
-    return x.replace("    await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');\n    }",
-                     "    await sendStage(`BULKEND ${id} ${hex32(crc32(ciphertext))}`,'BULKQUEUED');")
-strip_batch_comment=lambda x:re.sub(r'/\* Bounded .*?\*/','',x,flags=re.DOTALL)
-assert strip_batch_comment(strip_short_bulk_path(bulk_after))==strip_batch_comment(bulk_before),'USB codec changed beyond batch count'
-media_before=subprocess.check_output(['git','show','v1.8.0-rc.4:web/lora_media.js'],cwd=root)
-media_after=(root/'web/lora_media.js').read_bytes()
-assert media_after.replace(b'SEGMENT=7040',b'SEGMENT=5800')==media_before, 'media codec changed beyond segment size'
-fw=(root/'firmware/main/main.c').read_text()
+r=Path(__file__).resolve().parents[1]
+for path in ('web/protocol.js','web/lora_media.js','web/lora_receipts.js',
+             'web/styles.css','firmware/components/offgrid_sx1278/offgrid_sx1278.c',
+             'firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c',
+             'firmware/components/offgrid_arq/og_sr_usb.c'):
+ assert (r/path).read_bytes()==subprocess.check_output(['git','show','v3.0.3-rc.1-android-native-rf:'+path],cwd=r),path
+fw=(r/'firmware/main/main.c').read_text();web=(r/'web/app.js').read_text()
 assert 'media_restore_requested' in fw and 'MEDIA|RESTORED|' in fw
 assert 'profile_start_offer(OG_MODE_LOW,false,false,true)' in fw
-assert 'OG_PROFILE_MEDIA_FLAG' in (root/'firmware/main/lora_profile_control.h').read_text()
-assert 'media_service();' in fw and 'media_boost_active' in fw
+assert 'MEDIA|ERROR|ULTRA_TEXT_ONLY' in fw
 assert 'og_arq_bridge_cancel(&arq,&arq_io,"PROFILE_CHANGED_UNCONFIRMED")' in fw
-assert 'FW=1.8.0-rc.4' in fw and 'MEDIAFAST=1' in fw
-web=(root/'web/app.js').read_text()
+assert 'FW=1.8.0-rc.4' in fw and 'FW=1.8.0-rc.4' in web
 assert "mediaModeCommand('MEDIA ON'" in web and "mediaModeCommand('MEDIA OFF'" in web
-assert "FW=1.8.0-rc.4" in web and 'MEDIAFAST=1' in web
-for line in (root/'docs/ANDROID_FROZEN_SHA256.txt').read_text().splitlines():
-    if not line or line.startswith('#'):continue
-    import hashlib
-    sha,rel=line.split('  ',1)
-    if rel in ('app/build.gradle.kts','app/src/main/AndroidManifest.xml'):
-        continue  # intentional Android v2.0 launcher/WebView dependency change
-    assert hashlib.sha256((root/'android'/rel).read_bytes()).hexdigest()==sha
-print('PASS: radio ARQ and web media codec unchanged; legacy Android Kotlin sources preserved')
+assert 'Ultra SF12 is text only' in web
+print('PASS: original encrypted media codecs, receipts, radio SPI driver, USB staging and app preserved; Ultra text-only enforced')

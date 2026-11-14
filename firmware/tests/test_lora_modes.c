@@ -14,7 +14,8 @@ int main(void) {
     assert(og_mode_parse("LOW")==OG_MODE_LOW);
     assert(og_mode_parse("BALANCED")==OG_MODE_BALANCED);
     assert(og_mode_parse("MAX")==OG_MODE_MAX);
-    for(unsigned i=OG_MODE_LOW;i<=OG_MODE_MAX;i++){
+    assert(og_mode_parse("ULTRA")==OG_MODE_ULTRA);
+    for(unsigned i=OG_MODE_LOW;i<=OG_MODE_ULTRA;i++){
         const offgrid_sx1278_profile_t p=og_mode_profile((uint8_t)i);
         offgrid_sx1278_register_profile_t r={0};
         assert(offgrid_sx1278_make_registers(&p,&r));
@@ -36,6 +37,11 @@ int main(void) {
     assert(offgrid_sx1278_make_registers(&max,&reg));
     assert(reg.modem_config1==0x72 && reg.modem_config2==0x94 && reg.pa_config==0x8d && reg.pa_dac==0x87);
     assert(og_mode_ack_wait_ms(OG_MODE_LOW,1)<og_mode_ack_wait_ms(OG_MODE_MAX,1));
+    offgrid_sx1278_profile_t ultra=og_mode_profile(OG_MODE_ULTRA);
+    assert(ultra.spreading_factor==12 && ultra.bandwidth==OFFGRID_SX1278_BW_125_KHZ && ultra.high_pa_dac);
+    assert(offgrid_sx1278_make_registers(&ultra,&reg));
+    assert(reg.modem_config1==0x72 && reg.modem_config2==0xC4 && reg.modem_config3==0x0C);
+    assert(max.spreading_factor==9 && max.bandwidth==OFFGRID_SX1278_BW_125_KHZ);
     assert(max.tx_power_dbm<=18);
     assert(!offgrid_sx1278_profile_valid(&(offgrid_sx1278_profile_t){
         .frequency_hz=433000000, .bandwidth=OFFGRID_SX1278_BW_500_KHZ,

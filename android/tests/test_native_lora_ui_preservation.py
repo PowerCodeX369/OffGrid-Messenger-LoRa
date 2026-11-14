@@ -13,7 +13,8 @@ expected=expected.replace('Text("Mode: ${radioLink?.rateMode ?: "unknown"} · Pe
 expected=expected.replace('''"AUTO"->"Auto (adaptive)";"SPEED"->"Speed";"RANGE"->"Range"
                                 "LR500"->"True LR 500 kbps";else->"True LR 250 kbps"''',
                           '''"AUTO"->"Auto (adaptive)";"FAST"->"Fast · SF7 / 500 kHz"
-                                "BALANCED"->"Balanced · SF7 / 250 kHz";else->"Max Range · SF9 / 125 kHz"''')
+                                "BALANCED"->"Balanced · SF7 / 250 kHz"
+                                "RANGE"->"Max Range · SF9 / 125 kHz";else->"Ultra Long Range · SF12 · TEXT only"''')
 assert expected.encode()==(src/'PremiumUi.kt').read_bytes(), 'Changes outside the requested LoRa mode menu are forbidden'
 assert not (src/'LoRaActivity.kt').exists(), 'New WebView UI must not exist'
 assert not (root/'android/app/src/main/assets/www').exists(), 'Bundled second UI must be removed'
@@ -25,10 +26,11 @@ assert b'LoRaNativeBulk' in (src/'MainActivity.kt').read_bytes()
 assert 'BULKBEGIN' in (src/'LoRaNativeBulk.kt').read_text()
 assert 'BULKCHUNK' in (src/'LoRaNativeBulk.kt').read_text()
 assert 'RXBCHUNK' in (src/'LoRaNativeBulk.kt').read_text()
-# v3.0.3 intentionally updates only main.c link telemetry / automatic RF policy.
-# Keep the radio driver, ARQ implementation, web, BLE authentication and UI frozen.
-unchanged=subprocess.check_output(['git','diff','--name-only','v3.0.0-rc.1-android','--','web','firmware/components','firmware/main/ble_auth_psa.h'],cwd=root)
-assert unchanged==b'', 'Protected web, BLE auth or RF driver changed'
-actual=subprocess.check_output(['git','diff','--name-only','v3.0.0-rc.1-android','--','firmware/main'],cwd=root).decode().splitlines()
-assert set(actual)<= {'firmware/main/main.c','firmware/main/lora_auto.h','firmware/main/ble_bridge.c'},'Unrelated firmware source changed'
-print('PASS: Original native UI preserved except requested LoRa radio menu; native launcher, web and firmware unchanged')
+# Preserve original source presentation except the requested new menu option.
+# The Ultra protocol requires changes to the radio worker and ARQ; enforce
+# that the BLE auth/KDF and SX1278 SPI driver remain untouched.
+protected=['firmware/main/ble_auth_psa.h','firmware/components/offgrid_sx1278/offgrid_sx1278.c']
+for name in protected:
+    before=subprocess.check_output(['git','show','v3.0.3-rc.1-android-native-rf:'+name],cwd=root)
+    assert before==(root/name).read_bytes(),name
+print('PASS: original Compose UI preserved except Ultra mode menu; BLE authentication and SPI driver unchanged')
