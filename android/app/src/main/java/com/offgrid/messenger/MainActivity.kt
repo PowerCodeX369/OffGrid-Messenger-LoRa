@@ -80,11 +80,9 @@ private val mainHandler = Handler(Looper.getMainLooper())
 data class ChatItem(val id:String,val text:String,val outgoing:Boolean,val timestamp:Long,
     val status:String="sent",val kind:Int=OgmCodec.TEXT,val bytes:ByteArray?=null,
     val mime:String="",val width:Int=0,val height:Int=0,val durationMs:Int=0,val progress:Int=0, val speedKiBs:Float=0f, val edited:Boolean=false, val deleted:Boolean=false)
-private data class Transfer(val frames:List<ByteArray>,val messageId:String,val control:Boolean=false,
-    val media:Boolean=false,
-    var index:Int=0,var session:String="",var packetId:String="",var attempts:Int=0,
-    var bleToken:Int?=null,
-    var mediaWindow:MediaTransferWindow?=null)
+private data class Transfer(val frames:MutableList<LoRaNativeProtocol.Sealed>,val messageId:String,
+    val control:Boolean=false,val media:Boolean=false,var index:Int=0,var attempts:Int=0)
+
 
 class MainActivity : ComponentActivity() {
     private lateinit var secure: SecureKeyStore
@@ -99,18 +97,34 @@ class MainActivity : ComponentActivity() {
     private var notificationPreview by mutableStateOf(false)
     private var keepBleBackground by mutableStateOf(false)
     private var accessibleVoiceTap by mutableStateOf(false)
-    private val assembler = OgmAssembler { secure.readPairingKey() }
+    private val mediaReceiver = LoRaNativeProtocol.MediaReceiver()
+    private val completedBulkIds = linkedMapOf<String,String>()
     private val items = mutableStateListOf<ChatItem>()
     private val pending = ArrayDeque<Transfer>()
     private var isSending = false
-    private var activeMedia:MediaTransferWindow?=null
+    private var loRaCapable = false
+    private var bleAuthenticated = false
+    private var mediaMode = "idle" // idle, entering, active, restoring
+    private var mediaTimer:Runnable? = null
     private var fastPhotos by mutableStateOf(true)
-    private val mediaAcks = RadioMediaAckBatcher(
-        { action, timeout -> mainHandler.postDelayed(action, timeout) },
-        { action -> mainHandler.removeCallbacks(action) },
-        { command -> link?.send(command) }
-    )
-    private var ackTimeout: Runnable? = null
+    private val bulk by lazy { LoRaNativeBulk(
+        write={command -> link?.send(command)},
+        schedule={r,ms -> mainHandler.postDelayed(r,ms)},
+        cancel={r -> mainHandler.removeCallbacks(r)},
+        completed={ok,reason -> completedBulk(ok,reason)},
+        transmitted={
+            pending.firstOrNull()?.takeIf{!it.control && !it.media}?.let{updateReceipt(it.messageId,"sent")}
+        },
+        progress={n,total ->
+            val job=pending.firstOrNull()
+            if(job!=null && !job.control && total>0){
+                val index=items.indexOfFirst{it.id==job.messageId}
+                if(index>=0)items[index]=items[index].copy(progress=
+                    ((job.index*100 + (100*n/total))/job.frames.size).coerceIn(0,100))
+            }
+        },
+        received={peer,id,data -> receiveBulk(peer,id,data)}
+    )}
     private var connected by mutableStateOf(false)
     private var radioLink by mutableStateOf<RadioLink?>(null)
     private var state by mutableStateOf("Not connected")
@@ -198,13 +212,16 @@ class MainActivity : ComponentActivity() {
         dark = preferences.getBoolean("dark",(resources.configuration.uiMode and 0x30) == 0x20)
         link = BleSessionHolder
         BleSessionHolder.attach(this, {s,ready ->
-            state=s;connected=ready
-            if(ready) startNext() else {
-                radioLink=null
-                activeMedia?.cancelTransfer(); activeMedia=null
-                pending.forEach { it.mediaWindow=null; it.index=0 }
-                mediaAcks.clear()
-                isSending=false; cancelAckTimeout()
+            state=s;bleAuthenticated=ready
+            if(ready){
+                link?.send("CAPS?")
+                connected=loRaCapable
+                if(connected)startNext()
+            }else{
+                connected=false;loRaCapable=false
+                radioLink=null;bulk.reset();mediaReceiver.clear()
+                pending.firstOrNull()?.let{it.attempts=0}
+                isSending=false;stopMediaTimer();mediaMode="idle"
                 if(recording) {
                     recordAutoStop?.let(mainHandler::removeCallbacks);recordAutoStop=null
                     runCatching { voiceRecorder.finish(cancel=true) };recording=false
@@ -221,14 +238,14 @@ class MainActivity : ComponentActivity() {
         if (recording) runCatching { voiceRecorder.finish(cancel=true) }
         recordAutoStop?.let(mainHandler::removeCallbacks)
         mediaWorker.shutdownNow()
-        activeMedia?.cancelTransfer();activeMedia=null;mediaAcks.clear()
+        bulk.reset();mediaReceiver.clear();stopMediaTimer()
         scheduledHistory?.let(mainHandler::removeCallbacks)
         val finalSnapshot=items.toList()
         historyWorker.execute { runCatching { history.save(finalSnapshot) } }
         historyWorker.shutdown()
         BleSessionHolder.detach()
         if(!keepBleBackground && !isChangingConfigurations) link?.stop()
-        cancelAckTimeout();super.onDestroy()
+        super.onDestroy()
     }
     override fun onResume() { super.onResume(); appResumed=true }
     override fun onPause() { appResumed=false; super.onPause() }
@@ -344,133 +361,120 @@ class MainActivity : ComponentActivity() {
         trustedAddress?.let { link?.connect(it) }
     }
 
-    private fun cancelAckTimeout(){ackTimeout?.let(mainHandler::removeCallbacks);ackTimeout=null}
-    private fun waitForAck(phase: String) {
-        cancelAckTimeout()
-        val runnable = Runnable {
-            val job=pending.firstOrNull() ?: return@Runnable
-            if(!connected)return@Runnable
-            if(job.attempts>=3){
-                pending.removeFirst();isSending=false
-                items.indexOfFirst{it.id==job.messageId}.takeIf{it>=0}?.let{idx -> items[idx]=items[idx].copy(status="failed")}
-                state="Radio confirmation timed out; retry message"
-                startNext();return@Runnable
-            }
-            job.attempts++
-            // Radio failed or the queued response disappeared. Re-submit the same encrypted fragment.
-            job.bleToken=null;link?.send("MSGHEX ${OgmCodec.hex(job.frames[job.index])}")
-            waitForAck("queued")
-        }
-        ackTimeout=runnable
-        mainHandler.postDelayed(runnable,if(phase=="queued")7500 else 16000)
-    }
-    private fun startMediaWindow(job:Transfer) {
-        isSending=true
-        val sender = job.mediaWindow ?: MediaTransferWindow(
-            frames = job.frames, window = 3,
-            nowMs = { android.os.SystemClock.elapsedRealtime() },
-            schedule = { alarm, delay -> mainHandler.postDelayed(alarm,delay) },
-            cancel = { alarm -> mainHandler.removeCallbacks(alarm) },
-            sendFrame = { frame -> link?.sendFrame(frame) },
-            onProgress = { count, elapsedMs ->
-                if(count % 8 == 0 || count == job.frames.size) {
-                    val idx=items.indexOfFirst { it.id == job.messageId }
-                    if(idx >= 0) {
-                        val message=items[idx]
-                        val bytes=(message.bytes?.size ?: 0).toDouble()
-                        val rate=(bytes * count / job.frames.size / 1024.0 / (elapsedMs/1000.0)).toFloat()
-                        items[idx]=message.copy(progress=100*count/job.frames.size, speedKiBs=rate)
-                    }
-                }
-            },
-            onFinished = { elapsedMs ->
-                bleTrace("MEDIA_TX_COMPLETE kind=${if(job.frames.size>1)"batch" else "single"} frames=${job.frames.size} duration_ms=$elapsedMs")
-                activeMedia=null;job.mediaWindow=null
-                updateReceipt(job.messageId,"sent")
-                pending.remove(job);isSending=false
+    private fun stopMediaTimer(){mediaTimer?.let(mainHandler::removeCallbacks);mediaTimer=null}
+    private fun beginMediaSession(){
+        mediaMode="entering"
+        link?.send("MEDIA ON")
+        stopMediaTimer()
+        val timeout=Runnable {
+            if(mediaMode=="entering"){
+                mediaMode="idle"
+                // A still-negotiating RF profile cannot safely accept BULKBEGIN.
+                // Fail this media attempt instead of forcing ciphertext onto an
+                // unconfirmed radio frequency/modulation profile.
+                val failed=pending.firstOrNull()
+                if(failed!=null && failed.media){pending.removeFirst();updateReceipt(failed.messageId,"failed")}
+                link?.send("MEDIA OFF")
+                state="Media RF synchronization timed out; retry after both nodes agree"
                 startNext()
-            },
-            onFailed = { reason ->
-                bleTrace("MEDIA_TX_FAILED $reason")
-                activeMedia=null;job.mediaWindow=null
-                updateReceipt(job.messageId,"sent")
-                pending.remove(job);isSending=false
-                updateReceipt(job.messageId,"failed")
-                state="Media transfer failed: $reason"
+            }
+        }
+        mediaTimer=timeout;mainHandler.postDelayed(timeout,22_000L)
+    }
+    private fun endMediaSession(){
+        if(mediaMode=="idle"){startNext();return}
+        mediaMode="restoring"
+        link?.send("MEDIA OFF")
+        stopMediaTimer()
+        val timeout=Runnable {
+            if(mediaMode=="restoring"){
+                mediaMode="idle"
+                state="RF restore not confirmed; check both nodes' active profiles"
                 startNext()
-            },
-            onPaused = {
-                if(activeMedia === job.mediaWindow) {
-                    activeMedia=null;isSending=false
-                    // Retain completed window state. Urgent receipts go first.
-                    val urgent=pending.firstOrNull { it.control }
-                    if(urgent!=null) { pending.remove(urgent);pending.addFirst(urgent) }
-                    startNext()
-                }
             }
-        ).also { job.mediaWindow=it }
-        activeMedia=sender
-        sender.startOrResume()
-    }
-    private fun startNext() {
-        if(!connected || isSending)return
-        // Acknowledge delivered/read/played promptly even during a large photo.
-        val front=pending.firstOrNull()?:return
-        if(!front.control) {
-            val urgent=pending.firstOrNull { it.control }
-            if(urgent!=null) { pending.remove(urgent);pending.addFirst(urgent) }
         }
-        val t=pending.firstOrNull()?:return
-        if(t.media && !t.control && t.frames.size>1) { startMediaWindow(t);return }
-        isSending=true
-        t.attempts=0
-        t.bleToken=null;link?.send("MSGHEX ${OgmCodec.hex(t.frames[t.index])}")
-        waitForAck("queued")
+        mediaTimer=timeout;mainHandler.postDelayed(timeout,18_000L)
     }
-    private fun advanceFrame() {
-        cancelAckTimeout()
-        if(pending.isEmpty())return
-        val job=pending.first()
-        job.index++
-        if(!job.control && job.frames.size>1 && (job.index%8==0 || job.index==job.frames.size)) {
-            val idx=items.indexOfFirst { it.id==job.messageId }
-            if(idx>=0)items[idx]=items[idx].copy(progress=100*job.index/job.frames.size)
-        }
-        if(job.index<job.frames.size){
-            // A long photo/voice transfer must not hold up an authenticated
-            // delivered/read/played receipt. Interleave at an ACK boundary,
-            // never in the middle of a radio frame or a GATT write.
-            if(!job.control) {
-                val urgent=pending.firstOrNull { it.control }
-                if(urgent!=null) {
-                    pending.remove(urgent)
-                    pending.addFirst(urgent)
-                    isSending=false
-                    startNext()
-                    return
+    private fun completedBulk(ok:Boolean,reason:String){
+        val job=pending.firstOrNull()?:run{isSending=false;return}
+        isSending=false
+        if(!ok){
+            if(job.attempts++<2 && connected){
+                state="Retrying unconfirmed LoRa transfer"
+                // A new AES-GCM nonce + transfer ID avoids the radio bridge's
+                // completed-transfer replay cache, while the 64-bit message ID
+                // stays identical for authenticated app-level deduplication.
+                val key=secure.readPairingKey()
+                if(key!=null){
+                    try{
+                        val old=job.frames[job.index]
+                        val env=LoRaNativeProtocol.open(key,old.transferId,old.ciphertext)
+                        job.frames[job.index]=LoRaNativeProtocol.seal(key,env.kind,env.id,env.text,
+                            env.width,env.height,env.timestamp/1000)
+                    }catch(e:Exception){bleTrace("Encrypted retry preparation failed")}
+                    finally{key.fill(0)}
                 }
+                mainHandler.postDelayed({if(connected)startNext()},350L*job.attempts)
+            }else{
+                pending.removeFirst()
+                if(!job.control)updateReceipt(job.messageId,"failed")
+                state="LoRa confirmation unavailable; retry the message"
+                if(job.media)endMediaSession() else startNext()
             }
-            job.attempts=0
-            job.bleToken=null;link?.send("MSGHEX ${OgmCodec.hex(job.frames[job.index])}")
-            waitForAck("queued")
-        } else {
+            return
+        }
+        job.attempts=0;job.index++
+        if(job.media){
+            val index=items.indexOfFirst{it.id==job.messageId}
+            if(index>=0)items[index]=items[index].copy(progress=100*job.index/job.frames.size)
+        }
+        if(job.index==job.frames.size){
             pending.removeFirst()
             if(!job.control)updateReceipt(job.messageId,"sent")
-            isSending=false
-            // Final radio ACK means all encrypted fragments reached remote browser MCU.
-            // True delivered/read ticks come only from authenticated app receipts.
+            if(job.media)endMediaSession() else startNext()
+        }else{
+            // A completed media ciphertext segment is the only safe BLE/ARQ
+            // preemption boundary. Keep the same media Fast session active.
+            val urgent=pending.firstOrNull{it!==job && (!it.media || it.control)}
+            if(urgent!=null){pending.remove(urgent);pending.addFirst(urgent)}
             startNext()
         }
     }
-    private fun pushEnvelope(kind:Int,messageId:String,body:ByteArray,control:Boolean=false,width:Int=0,height:Int=0) {
-        val secret=secure.readPairingKey() ?: return
-        try {
-            val frames=OgmCodec.seal(secret,kind,messageId,body,width,height)
-            pending.addLast(Transfer(frames,messageId,control,kind==OgmCodec.IMAGE || kind==OgmCodec.VOICE))
-            if(control) activeMedia?.pauseForReceipts()
+    private fun startNext(){
+        if(!connected||isSending||bulk.busy||mediaMode=="entering"||mediaMode=="restoring")return
+        val front=pending.firstOrNull()?:return
+        if(!front.control && !front.media){
+            val receipt=pending.firstOrNull{it.control}
+            if(receipt!=null){pending.remove(receipt);pending.addFirst(receipt)}
+        }
+        val job=pending.firstOrNull()?:return
+        if(job.media && mediaMode=="idle"){beginMediaSession();return}
+        isSending=true
+        try{bulk.start(job.frames[job.index],job.control)}catch(e:Exception){
+            isSending=false;state="LoRa staging unavailable: ${e.message}"
+            pending.removeFirst()
+            if(!job.control)updateReceipt(job.messageId,"failed")
+            if(job.media)endMediaSession() else startNext()
+        }
+    }
+    private fun pushEnvelope(kind:Int,messageId:String,body:ByteArray,control:Boolean=false,width:Int=0,height:Int=0){
+        val key=secure.readPairingKey() ?: run{state="Pairing key required";return}
+        try{
+            val media=(kind==OgmCodec.IMAGE || kind==OgmCodec.VOICE)
+            val parts:List<LoRaNativeProtocol.Sealed> = if(media){
+                val mime=if(kind==OgmCodec.IMAGE)listOf("image/webp","image/png","image/jpeg")
+                    .getOrNull(body[0].toInt() and 255) else listOf("audio/webm","audio/ogg","audio/mp4")
+                    .getOrNull(body[0].toInt() and 255)
+                require(mime!=null && body.size>=257)
+                val tsSeconds=System.currentTimeMillis()/1000
+                LoRaNativeProtocol.mediaParts(kind,mime,body.copyOfRange(1,body.size)).map{part->
+                    LoRaNativeProtocol.seal(key,OgmCodec.MEDIA_PART,messageId,part,width,height,tsSeconds)
+                }
+            }else listOf(LoRaNativeProtocol.seal(key,kind,messageId,body,width,height))
+            pending.addLast(Transfer(parts.toMutableList(),messageId,control,media))
             startNext()
-        } catch (ex: Exception) { state="Encryption error: ${ex.message}" }
-        finally { secret.fill(0) }
+        }catch(ex:Exception){state="Encryption/LoRa media error: ${ex.message}"}
+        finally{key.fill(0)}
     }
     private fun sendText(text:String) {
         if(!connected)return
@@ -516,11 +520,20 @@ class MainActivity : ComponentActivity() {
         if(!connected){state="Connect to record";return}
         try {
             voiceRecorder.start();recording=true
-            state="Recording voice · release to send (30s max)"
+            state="Recording voice · release to send (120s/40 KiB max)"
             val timeout=Runnable { if(recording) finishVoiceRecording() }
             recordAutoStop=timeout
-            mainHandler.postDelayed(timeout,30_000L)
+            mainHandler.postDelayed(timeout,120_000L)
+            scheduleVoiceSizeMonitor()
         } catch(ex:Exception) { state="Microphone unavailable: ${ex.message}";recording=false }
+    }
+    private fun scheduleVoiceSizeMonitor(){
+        mainHandler.postDelayed({
+            if(recording){
+                if(voiceRecorder.estimatedFileBytes()>=38*1024)finishVoiceRecording()
+                else scheduleVoiceSizeMonitor()
+            }
+        },400L)
     }
     private fun finishVoiceRecording() {
         if(!recording)return
@@ -585,128 +598,115 @@ class MainActivity : ComponentActivity() {
             if(current.status!=next){items[index]=current.copy(status=next);scheduleHistorySave()}
         }
     }
-    private fun consumeLine(line:String) {
+    private fun receiveBulk(peer:String,transferId:String,ciphertext:ByteArray){
+        val unique="$peer|$transferId"
+        completedBulkIds[unique]?.let{id->
+            val existing=items.firstOrNull{it.id==id && !it.outgoing}
+            if(existing!=null){
+                controlReceipt(OgmCodec.DELIVERED,id)
+                if(existing.status in listOf("read","played"))controlReceipt(OgmCodec.READ,id)
+            }
+            return
+        }
+        val key=secure.readPairingKey()?:return
+        try{
+            // AES-GCM authentication is mandatory before any message, receipt,
+            // or media part can change the native UI or encrypted history.
+            val env=LoRaNativeProtocol.open(key,transferId,ciphertext)
+            if(env.kind==OgmCodec.MEDIA_PART){
+                val part=mediaReceiver.accept(peer,env.id,env.text,env.width,env.height,env.timestamp)
+                if(part!=null){
+                    if(env.id in hiddenMessageIds){controlReceipt(OgmCodec.DELIVERED,env.id)}
+                    else if(items.none{it.id==env.id}){
+                        val chat=if(part.kind==OgmCodec.IMAGE)
+                            ChatItem(env.id,"Photo",false,env.timestamp,"delivered",OgmCodec.IMAGE,
+                                part.bytes,part.mime,part.width,part.height)
+                        else ChatItem(env.id,"Voice note",false,env.timestamp,"delivered",OgmCodec.VOICE,
+                                part.bytes,part.mime,durationMs=MediaPayload.durationFromParts(part.width,part.height))
+                        items.add(chat);scheduleHistorySave();controlReceipt(OgmCodec.DELIVERED,env.id)
+                        if(notificationsEnabled && (!appResumed||!chatScreenVisible))notifications.newMessage(chat,notificationPreview)
+                    } else controlReceipt(OgmCodec.DELIVERED,env.id)
+                }
+            }else if(env.kind in listOf(OgmCodec.TEXT,OgmCodec.IMAGE,OgmCodec.VOICE)){
+                if(env.id in hiddenMessageIds){controlReceipt(OgmCodec.DELIVERED,env.id)}
+                else if(items.none{it.id==env.id}){
+                    val chat=when(env.kind){
+                        OgmCodec.TEXT->{
+                            val text=env.text.toString(Charsets.UTF_8)
+                            require(text.isNotBlank() && text.length<=500)
+                            ChatItem(env.id,text,false,env.timestamp,"delivered")
+                        }
+                        OgmCodec.IMAGE->{
+                            val picture=MediaPayload.unpackPhoto(env.text,env.width,env.height)
+                            ChatItem(env.id,"Photo",false,env.timestamp,"delivered",OgmCodec.IMAGE,
+                                picture.bytes,picture.mime,picture.width,picture.height)
+                        }
+                        else->{
+                            val voice=MediaPayload.unpackVoice(env.text,MediaPayload.durationFromParts(env.width,env.height))
+                            ChatItem(env.id,"Voice note",false,env.timestamp,"delivered",OgmCodec.VOICE,
+                                voice.bytes,voice.mime,durationMs=voice.durationMs)
+                        }
+                    }
+                    items.add(chat);scheduleHistorySave();controlReceipt(OgmCodec.DELIVERED,env.id)
+                    if(notificationsEnabled && (!appResumed||!chatScreenVisible))notifications.newMessage(chat,notificationPreview)
+                }else controlReceipt(OgmCodec.DELIVERED,env.id)
+            }else when(env.kind){
+                OgmCodec.DELIVERED,OgmCodec.READ,OgmCodec.PLAYED -> if(env.text.size==8){
+                    updateReceipt(OgmCodec.hex(env.text),when(env.kind){
+                        OgmCodec.DELIVERED->"delivered";OgmCodec.READ->"read";else->"played"})
+                }
+                OgmCodec.RECEIPT_BATCH -> LoRaNativeProtocol.readReceiptBatch(env.text).forEach{
+                    updateReceipt(it.id,if(it.kind==OgmCodec.READ)"read" else "delivered")
+                }
+                OgmCodec.EDIT,OgmCodec.DELETE -> {
+                    val target=MessageMutation.target(env.text)
+                    val index=items.indexOfFirst{it.id==target&&!it.outgoing}
+                    if(index>=0){
+                        if(env.kind==OgmCodec.DELETE&&playingId==target)stopVoicePlayback()
+                        MessageMutation.apply(items[index],env.kind,env.text)?.let{
+                            items[index]=it;scheduleHistorySave()
+                        }
+                    }
+                }
+            }
+            completedBulkIds[unique]=env.id
+            while(completedBulkIds.size>512)completedBulkIds.remove(completedBulkIds.keys.first())
+        }catch(e:Exception){Log.w("OffGridLoRa","Rejected invalid authenticated LoRa payload",e)}
+        finally{key.fill(0)}
+    }
+    private fun consumeLine(line:String){
+        if(bulk.onLine(line))return
         val split=line.split('|')
-        when(split.firstOrNull()) {
-            "READY" -> state="ESP32 ready · channel 6"
-            "LINK" -> {
-                radioLink=RadioLink.parse(line)
-                // Do not replace the actual authenticated BLE connection state.
+        when(split.firstOrNull()){
+            "CAPS" -> {
+                val fields=split.drop(1).toSet()
+                val valid=fields.containsAll(setOf("FAMILY=LORA","PROTO=2","MEDIA=1","BULK=1"))
+                loRaCapable=valid
+                connected=bleAuthenticated && valid
+                state=if(connected)"Connected · authenticated LoRa BLE" else
+                    "LoRa BLE bulk unavailable: flash the companion BLE firmware on both radios"
+                if(connected)startNext()
             }
-            "RATE" -> {
-                bleTrace("ESP32 radio setting: ${split.drop(1).joinToString(" ")}")
-            }
-            "BQUEUED" -> if(isSending){
-                val reply=BleBinaryCodec.queued(line) ?: return
-                if(activeMedia != null) {
-                    activeMedia?.onBinaryQueued(reply.token,reply.session,reply.packetId)
-                    return
-                }
-                val job=pending.firstOrNull() ?: return
-                if(job.bleToken==reply.token){
-                    job.session=reply.session;job.packetId=reply.packetId
-                    waitForAck("delivered")
-                }
-            }
-            "QUEUED" -> if(split.size>=4&&isSending){
-                if(activeMedia != null) { activeMedia?.onQueued(split[3], split[1], split[2]);return }
-                val job=pending.firstOrNull()?:return
-                // MCU echoes the exact OGC4 frame as hex; reject stale queued responses.
-                if(split[3].equals(OgmCodec.hex(job.frames[job.index]),ignoreCase=true)){
-                    job.session=split[1];job.packetId=split[2]
-                    waitForAck("delivered")
-                }
-            }
-            "DELIVERED" -> if(split.size>=3&&isSending){
-                if(activeMedia != null) { activeMedia?.onDelivered(split[1],split[2]);return }
-                val job=pending.firstOrNull()?:return
-                if(job.session==split[1]&&job.packetId==split[2])advanceFrame()
-            }
-            "FAILED" -> if(split.size>=3&&isSending){
-                if(activeMedia != null) { activeMedia?.onFailed(split[1],split[2]);return }
-                val job=pending.firstOrNull()?:return
-                if(job.session==split[1]&&job.packetId==split[2]){
-                    cancelAckTimeout()
-                    if(job.attempts++ < 3){
-                        job.bleToken=null;link?.send("MSGHEX ${OgmCodec.hex(job.frames[job.index])}")
-                        waitForAck("queued")
-                    } else {
-                        pending.removeFirst();isSending=false
-                        updateReceipt(job.messageId,"failed");startNext()
+            "READY" -> if(connected)state="ESP32 LoRa ready"
+            "LINK" -> radioLink=RadioLink.parse(line)
+            "PROFILE","AUTO","MEDIA","POWER18" -> {
+                bleTrace(line.take(180))
+                if(split[0]=="MEDIA"){
+                    if(mediaMode=="entering" && split.getOrNull(1) in listOf("READY","BYPASS","ERROR")){
+                        stopMediaTimer();mediaMode="active";startNext()
+                    }else if(mediaMode=="restoring" && split.getOrNull(1) in
+                         listOf("RESTORED","OFF","RESTORE_FAILED")){
+                        stopMediaTimer();mediaMode="idle"
+                        if(split.getOrNull(1)=="RESTORE_FAILED")state="Restore failed; manually synchronize RF mode"
+                        startNext()
                     }
                 }
-            }
-            "RX" -> if(split.size>=5){
-                try {
-                    val frame=OgmCodec.unhex(split[4]);val parsed=OgmCodec.parseFrame(frame)?:return
-                    // Radio-level APPACK prevents transport congestion. The final
-                    // encrypted DELIVERED/READ receipts confirm end-to-end handling.
-                    if(parsed.bulk) mediaAcks.accept(split[1],split[2],split[3])
-                    else link?.send("APPACK ${split[1]} ${split[2]} ${split[3]}")
-                    val env=assembler.accept(split[1],split[2],frame)?:return
-                    // A local deletion is permanent even when the sender retries a frame.
-                    if(env.id in hiddenMessageIds && env.kind in listOf(OgmCodec.TEXT,OgmCodec.IMAGE,OgmCodec.VOICE)) {
-                        controlReceipt(OgmCodec.DELIVERED,env.id)
-                        return
-                    }
-                    when(env.kind) {
-                        OgmCodec.TEXT -> {
-                            val body=env.text.toString(Charsets.UTF_8)
-                            if(body.length in 1..500 && items.none{it.id==env.id}){
-                                items.add(ChatItem(env.id,body,false,env.timestamp,"delivered"))
-                                controlReceipt(OgmCodec.DELIVERED,env.id)
-                                scheduleHistorySave()
-                                if(notificationsEnabled && (!appResumed || !chatScreenVisible))
-                                    notifications.newMessage(items.last(),notificationPreview)
-                            }
-                        }
-                        OgmCodec.IMAGE -> {
-                            val photo=MediaPayload.unpackPhoto(env.text,env.width,env.height)
-                            if(items.none{it.id==env.id}){
-                                items.add(ChatItem(env.id,"Photo",false,env.timestamp,"delivered",OgmCodec.IMAGE,
-                                    photo.bytes,photo.mime,photo.width,photo.height))
-                                controlReceipt(OgmCodec.DELIVERED,env.id)
-                                scheduleHistorySave()
-                                if(notificationsEnabled && (!appResumed || !chatScreenVisible))
-                                    notifications.newMessage(items.last(),notificationPreview)
-                            }
-                        }
-                        OgmCodec.VOICE -> {
-                            val ms=MediaPayload.durationFromParts(env.width,env.height)
-                            val voice=MediaPayload.unpackVoice(env.text,ms)
-                            if(items.none{it.id==env.id}){
-                                items.add(ChatItem(env.id,"Voice note",false,env.timestamp,"delivered",OgmCodec.VOICE,
-                                    voice.bytes,voice.mime,durationMs=voice.durationMs))
-                                controlReceipt(OgmCodec.DELIVERED,env.id)
-                                scheduleHistorySave()
-                                if(notificationsEnabled && (!appResumed || !chatScreenVisible))
-                                    notifications.newMessage(items.last(),notificationPreview)
-                            }
-                        }
-                        OgmCodec.DELIVERED -> if(env.text.size==8) updateReceipt(OgmCodec.hex(env.text),"delivered")
-                        OgmCodec.READ -> if(env.text.size==8) updateReceipt(OgmCodec.hex(env.text),"read")
-                        OgmCodec.PLAYED -> if(env.text.size==8) updateReceipt(OgmCodec.hex(env.text),"played")
-                        OgmCodec.EDIT, OgmCodec.DELETE -> {
-                            val target=MessageMutation.target(env.text)
-                            val idx=items.indexOfFirst {it.id==target && !it.outgoing}
-                            if(idx>=0) {
-                                if(env.kind==OgmCodec.DELETE && playingId==target)stopVoicePlayback()
-                                val changed=MessageMutation.apply(items[idx],env.kind,env.text)
-                                if(changed!=null){items[idx]=changed;scheduleHistorySave()}
-                            }
-                        }
-                    }
-                } catch (ex: Exception) { Log.w("OffGrid", "Rejected invalid encrypted frame",ex) }
             }
             "ERROR" -> {
-                val error=split.getOrNull(1) ?: "error"
-                state=if(error in setOf("LR_NOT_SUPPORTED_BY_WIFI_DRIVER","BAD_RATE_MODE","BLE_DENIED"))
-                    "Radio control rejected: $error" else "Node: $error"
-                bleTrace(state)
+                state="Node: ${split.drop(1).joinToString(" ")}";bleTrace(state)
             }
         }
     }
-
     @SuppressLint("MissingPermission")
     private fun startSystemPairing(launch: (IntentSenderRequest) -> Unit) {
         if (!hasBluetoothPermission()) { state="Grant Nearby devices permission"; return }
@@ -714,7 +714,7 @@ class MainActivity : ComponentActivity() {
         try {
             val companion = getSystemService(CompanionDeviceManager::class.java)
             val filter = BluetoothLeDeviceFilter.Builder()
-                .setNamePattern(Pattern.compile("^OffGrid-.*"))
+                .setNamePattern(Pattern.compile("^(OffGrid-.*|OffGridLoRa-.*)$"))
                 .build()
             val request = AssociationRequest.Builder()
                 .addDeviceFilter(filter)
@@ -893,7 +893,16 @@ class MainActivity : ComponentActivity() {
                     disconnect={link?.stop();state="Disconnected";radioLink=null},
                     setRadioMode={mode ->
                         if(connected && mode in RadioLink.choices) {
-                            link?.send("RATE $mode")
+                            // Preserve every original UI choice, translate its
+                            // old ESP-NOW rate label into a LoRa profile command.
+                            val command=when(mode){
+                                "AUTO"->"AUTO ON"
+                                "SPEED","LR500"->"PROFILE LOW"
+                                "RANGE"->"PROFILE MAX"
+                                "LR250"->"PROFILE BALANCED"
+                                else->"STATUS"
+                            }
+                            link?.send(command)
                             // A LINK response reports the applied mode; do not fake the result.
                             mainHandler.postDelayed({if(connected)link?.send("STATUS")},450)
                         }

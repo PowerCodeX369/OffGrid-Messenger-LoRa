@@ -4,7 +4,7 @@ plugins { id("com.android.application"); id("org.jetbrains.kotlin.android"); id(
 android {
  namespace="com.offgrid.messenger"
  compileSdk=36
- defaultConfig { applicationId="com.offgrid.messenger"; minSdk=26; targetSdk=36; versionCode=300; versionName="3.0.0-rc.1-universal-lora" }
+ defaultConfig { applicationId="com.offgrid.messenger"; minSdk=26; targetSdk=36; versionCode=301; versionName="3.0.1-rc.1-native-lora" }
  buildFeatures { compose=true }
  compileOptions { sourceCompatibility=JavaVersion.VERSION_17; targetCompatibility=JavaVersion.VERSION_17 }
 
@@ -26,7 +26,6 @@ dependencies {
  implementation("androidx.compose.material:material-icons-extended")
  implementation("androidx.activity:activity-compose:1.10.1")
  implementation("androidx.core:core-ktx:1.16.0")
- implementation("androidx.webkit:webkit:1.18.0")
  implementation("androidx.lifecycle:lifecycle-runtime-compose:2.9.1")
  // CameraX preview/capture stays in-app; pin a stable SDK-36 compatible release.
  val camerax="1.5.3"

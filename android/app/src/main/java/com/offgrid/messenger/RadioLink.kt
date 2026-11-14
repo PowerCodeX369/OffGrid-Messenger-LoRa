@@ -12,7 +12,7 @@ data class RadioLink(
     val changes: Long?,
     val normalPeerAgeMs: Long?
 ) {
-    val hasPeer: Boolean get() = peer != "BROADCAST"
+    val hasPeer: Boolean get() = peer != "BROADCAST" && peer != "NONE"
     val signalLabel: String get() = when {
         normalPeerAgeMs != null && (normalPeerAgeMs < 0 || normalPeerAgeMs > 12_000) -> "Peer not heard"
         else -> rssiDbm?.let { "$it dBm" } ?: "No peer signal"
@@ -21,6 +21,7 @@ data class RadioLink(
         "0.25", "25" -> "LR 250 kbps"
         "0.5", "50" -> "LR 500 kbps"
         "1", "6", "12" -> "$phy Mbps"
+        "0" -> "SX1278 LoRa"
         else -> if (phy.isBlank()) "Unknown PHY" else "$phy Mbps"
     }
     val summary: String get() = if (rssiDbm == null || signalLabel == "Peer not heard")
@@ -37,8 +38,14 @@ data class RadioLink(
                 if (i <= 0 || i == field.lastIndex) null else field.substring(0, i) to field.substring(i + 1)
             }.toMap()
             val peer = fields[1]
-            val dbm = values["RSSI"]?.toIntOrNull()?.takeIf { peer != "BROADCAST" && it in -125..-1 }
-            val mode = values["MODE"]?.takeIf { it in choices } ?: "AUTO"
+            val dbm = values["RSSI"]?.toIntOrNull()?.takeIf { peer != "BROADCAST" && peer != "NONE" && it in -160..-1 }
+            val mode = when {
+                values["AUTO"]=="1" -> "AUTO"
+                values["PROFILE"]=="LOW" -> "SPEED"
+                values["PROFILE"]=="BALANCED" -> "LR250"
+                values["PROFILE"]=="MAX" -> "RANGE"
+                else -> values["MODE"]?.takeIf { it in choices } ?: "AUTO"
+            }
             return RadioLink(peer, dbm, values["PHY"] ?: "", values["PHYMODE"] ?: "",
                 mode, values["CHANGES"]?.toLongOrNull(), values["REGAGE"]?.toLongOrNull())
         }

@@ -83,6 +83,7 @@ class VoiceNoteRecorder(private val context:Context) {
     private var mime="audio/mp4"
     private var started=0L
     val isRecording get()=recorder!=null
+    fun estimatedFileBytes():Long=output?.length()?:0L
 
     private fun createRecorder():MediaRecorder = if(Build.VERSION.SDK_INT>=31) MediaRecorder(context) else {
         @Suppress("DEPRECATION")
@@ -109,7 +110,7 @@ class VoiceNoteRecorder(private val context:Context) {
                     r.setAudioSamplingRate(16000)
                 }
                 r.setAudioChannels(1)
-                r.setAudioEncodingBitRate(16000)
+                r.setAudioEncodingBitRate(8000)
                 r.setOutputFile(file.absolutePath)
                 r.prepare();r.start()
                 recorder=r;output=file;mime=format;started=SystemClock.elapsedRealtime()
@@ -124,7 +125,7 @@ class VoiceNoteRecorder(private val context:Context) {
     fun finish(cancel:Boolean=false):MediaPayload.Voice? {
         val r=recorder ?: return null
         val file=output
-        val elapsed=(SystemClock.elapsedRealtime()-started).toInt().coerceAtMost(30_000)
+        val elapsed=(SystemClock.elapsedRealtime()-started).toInt().coerceAtMost(120_000)
         recorder=null;output=null;started=0
         try {
             if(cancel){ try{r.stop()}catch(_:RuntimeException){};return null }
