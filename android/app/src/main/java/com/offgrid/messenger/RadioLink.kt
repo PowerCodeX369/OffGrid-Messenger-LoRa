@@ -1,8 +1,7 @@
 package com.offgrid.messenger
 
-/** The ESP32's periodic LINK record measures ESP-NOW RF, not phone-to-ESP32 BLE RSSI.
- * No inferred/guessed RSSI values; missing peers and malformed records remain unknown.
- */
+/** Authenticated SX1278 peer telemetry forwarded by the existing LoRa BLE service.
+ * RSSI is the remote LoRa radio link, NOT the phone's BLE RSSI. */
 data class RadioLink(
     val peer: String,
     val rssiDbm: Int?,
@@ -10,25 +9,40 @@ data class RadioLink(
     val phyMode: String,
     val rateMode: String,
     val changes: Long?,
-    val normalPeerAgeMs: Long?
+    val normalPeerAgeMs: Long?,
+    val activeProfile: String = "UNKNOWN"
 ) {
     val hasPeer: Boolean get() = peer != "BROADCAST" && peer != "NONE"
     val signalLabel: String get() = when {
         normalPeerAgeMs != null && (normalPeerAgeMs < 0 || normalPeerAgeMs > 12_000) -> "Peer not heard"
         else -> rssiDbm?.let { "$it dBm" } ?: "No peer signal"
     }
-    val phyLabel: String get() = when (phy) {
-        "0.25", "25" -> "LR 250 kbps"
-        "0.5", "50" -> "LR 500 kbps"
-        "1", "6", "12" -> "$phy Mbps"
-        "0" -> "SX1278 LoRa"
-        else -> if (phy.isBlank()) "Unknown PHY" else "$phy Mbps"
+    val phyLabel: String get() = when (if(rateMode=="AUTO")activeProfile else rateMode) {
+        "FAST" -> "SF7 / BW500"
+        "BALANCED" -> "SF7 / BW250"
+        "RANGE" -> "SF9 / BW125"
+        "AUTO" -> "SX1278 LoRa adaptive"
+        else -> "SX1278 LoRa"
     }
-    val summary: String get() = if (rssiDbm == null || signalLabel == "Peer not heard")
-        "$signalLabel · $rateMode" else "$signalLabel · $phyLabel · $rateMode"
+    val modeLabel: String get() = when (rateMode) {
+        "FAST" -> "Fast"
+        "BALANCED" -> "Balanced"
+        "RANGE" -> "Max Range"
+        "AUTO" -> "Auto (adaptive)"
+        else -> "Unknown"
+    }
+    val summary: String get() = "$signalLabel · $phyLabel · $modeLabel"
 
     companion object {
-        val choices: List<String> = listOf("AUTO", "SPEED", "RANGE", "LR500", "LR250")
+        val choices: List<String> = listOf("AUTO", "FAST", "BALANCED", "RANGE")
+        fun command(mode: String): String? = when (mode) {
+            "AUTO" -> "AUTO ON"
+            "FAST" -> "PROFILE LOW"
+            "BALANCED" -> "PROFILE BALANCED"
+            "RANGE" -> "PROFILE MAX"
+            else -> null
+        }
+        fun requiresHighPower(mode: String): Boolean = mode in setOf("AUTO", "FAST", "RANGE")
         fun parse(line: String): RadioLink? {
             if (!line.startsWith("LINK|")) return null
             val fields = line.split('|')
@@ -39,15 +53,19 @@ data class RadioLink(
             }.toMap()
             val peer = fields[1]
             val dbm = values["RSSI"]?.toIntOrNull()?.takeIf { peer != "BROADCAST" && peer != "NONE" && it in -160..-1 }
+            // The LoRa firmware sends PROFILE=LOW/BALANCED/MAX and AUTO=0/1.
+            // Never interpret legacy ESP-NOW PHY=0.25/0.5 or MODE=LR250 as LoRa speeds.
             val mode = when {
-                values["AUTO"]=="1" -> "AUTO"
-                values["PROFILE"]=="LOW" -> "SPEED"
-                values["PROFILE"]=="BALANCED" -> "LR250"
-                values["PROFILE"]=="MAX" -> "RANGE"
-                else -> values["MODE"]?.takeIf { it in choices } ?: "AUTO"
+                values["AUTO"] == "1" -> "AUTO"
+                values["PROFILE"] == "LOW" -> "FAST"
+                values["PROFILE"] == "BALANCED" -> "BALANCED"
+                values["PROFILE"] == "MAX" -> "RANGE"
+                else -> "UNKNOWN"
             }
             return RadioLink(peer, dbm, values["PHY"] ?: "", values["PHYMODE"] ?: "",
-                mode, values["CHANGES"]?.toLongOrNull(), values["REGAGE"]?.toLongOrNull())
+                mode, values["PROFILE_CHANGES"]?.toLongOrNull() ?: values["CHANGES"]?.toLongOrNull(),
+                values["REGAGE"]?.toLongOrNull(),
+                when(values["PROFILE"]){"LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";else->"UNKNOWN"})
         }
     }
 }

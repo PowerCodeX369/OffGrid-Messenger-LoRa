@@ -430,21 +430,21 @@ private fun ChatTopBar(dark:Boolean,connected:Boolean,status:String,radioLink:Ra
             Box {
                 IconButton(onClick={menuOpen=true}){Icon(Icons.Default.MoreVert,"Radio and conversation options")}
                 DropdownMenu(expanded=menuOpen,onDismissRequest={menuOpen=false}) {
-                    Text("ESP-NOW link",modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp),
+                    Text("SX1278 LoRa link",modifier=Modifier.padding(horizontal=16.dp,vertical=8.dp),
                         style=MaterialTheme.typography.titleSmall,color=MaterialTheme.colorScheme.onSurface)
                     Text(if(connected)radioLink?.let { "${it.signalLabel} · ${it.phyLabel}" }
                         ?: "Waiting for signal data" else "Not connected",
                         modifier=Modifier.padding(horizontal=16.dp),
                         style=MaterialTheme.typography.bodySmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
-                    Text("Mode: ${radioLink?.rateMode ?: "unknown"} · Peer: ${radioLink?.peer ?: "unknown"}",
+                    Text("Mode: ${radioLink?.modeLabel ?: "unknown"} · Peer: ${radioLink?.peer ?: "unknown"}",
                         modifier=Modifier.padding(horizontal=16.dp,vertical=3.dp),
                         style=MaterialTheme.typography.labelSmall,color=MaterialTheme.colorScheme.onSurfaceVariant)
                     HorizontalDivider(Modifier.padding(vertical=8.dp))
                     RadioLink.choices.forEach { mode ->
                         DropdownMenuItem(
                             text={Text(when(mode){
-                                "AUTO"->"Auto (adaptive)";"SPEED"->"Speed";"RANGE"->"Range"
-                                "LR500"->"True LR 500 kbps";else->"True LR 250 kbps"})},
+                                "AUTO"->"Auto (adaptive)";"FAST"->"Fast · SF7 / 500 kHz"
+                                "BALANCED"->"Balanced · SF7 / 250 kHz";else->"Max Range · SF9 / 125 kHz"})},
                             leadingIcon={if(radioLink?.rateMode==mode)Icon(Icons.Default.Check,null)},
                             enabled=connected,
                             onClick={menuOpen=false;onRateMode(mode)}
