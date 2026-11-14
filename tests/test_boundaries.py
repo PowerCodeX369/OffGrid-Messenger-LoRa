@@ -64,8 +64,15 @@ protected=(
 hashes={p:h for h,p in (row.split('  ',1) for row in
  (root/'docs/ANDROID_FROZEN_SHA256.txt').read_text().splitlines() if '  ' in row)}
 for path in protected:
+    if path.endswith('/PremiumUi.kt'):
+        # The user explicitly requested LoRa labels/options in the existing
+        # dropdown. Test exact menu-only diff against the original native UI.
+        import subprocess,sys
+        subprocess.run([sys.executable,str(root/'android/tests/test_native_lora_ui_preservation.py')],
+                       cwd=root,check=True)
+        continue
     actual=hashlib.sha256((root/'android'/path).read_bytes()).hexdigest()
-    assert actual==hashes[path],f'Original native Android UI/BLE source changed: {path}'
+    assert actual==hashes[path],f'Original native Android BLE/security source changed: {path}'
 assert not (root/'android/app/src/main/java/com/offgrid/messenger/LoRaActivity.kt').exists()
 assert 'LoRaNativeBulk' in (root/'android/app/src/main/java/com/offgrid/messenger/MainActivity.kt').read_text()
-print('PASS: isolated LoRa, no Wi-Fi runtime, original native Compose UI/BLE GATT preserved')
+print('PASS: isolated LoRa, no Wi-Fi, original native screen except requested RF menu, BLE GATT preserved')

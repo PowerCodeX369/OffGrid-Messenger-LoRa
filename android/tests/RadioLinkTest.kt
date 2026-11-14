@@ -1,18 +1,31 @@
 import com.offgrid.messenger.RadioLink
 
 fun main() {
-    val normal=RadioLink.parse("LINK|1C:DB:D4:3B:00:FC|RSSI=-45|PHY=12|MODE=AUTO|CHANGES=2|PHYMODE=OFDM12|REGAGE=600")!!
-    check(normal.signalLabel=="-45 dBm")
-    check(normal.phyLabel=="12 Mbps")
-    check(normal.rateMode=="AUTO" && normal.changes==2L)
-    val lr=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-58|PHY=0.25|MODE=LR250|PHYMODE=LR250|REGAGE=250")!!
-    check(lr.summary.contains("LR 250 kbps") && lr.rateMode=="LR250")
-    val lost=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-58|PHY=0.5|MODE=AUTO|REGAGE=20000")!!
+    val fast=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-39|PHY=0|MODE=LORA|PROFILE=LOW|AUTO=0|PROFILE_CHANGES=4")!!
+    check(fast.rateMode=="FAST" && fast.modeLabel=="Fast" && fast.phyLabel=="SF7 / BW500")
+    check(fast.summary.contains("-39 dBm") && !fast.summary.contains("LR 500 kbps"))
+    check(fast.changes==4L)
+    val balanced=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-49|PHY=0|MODE=LORA|PROFILE=BALANCED|AUTO=0")!!
+    check(balanced.rateMode=="BALANCED" && balanced.phyLabel=="SF7 / BW250")
+    val range=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-117|PHY=0|PROFILE=MAX|AUTO=0")!!
+    check(range.rateMode=="RANGE" && range.phyLabel=="SF9 / BW125")
+    val auto=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-85|PHY=0|PROFILE=LOW|AUTO=1")!!
+    check(auto.rateMode=="AUTO" && auto.modeLabel=="Auto (adaptive)" && auto.phyLabel=="SF7 / BW500")
+    val legacy=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-58|PHY=0.25|MODE=LR250|PHYMODE=LR250")!!
+    check(legacy.rateMode=="UNKNOWN" && legacy.phyLabel=="SX1278 LoRa")
+    val lost=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-58|PROFILE=LOW|REGAGE=20000")!!
     check(lost.signalLabel=="Peer not heard")
-    val absent=RadioLink.parse("LINK|BROADCAST|RSSI=0|PHY=1|MODE=SPEED")!!
+    val absent=RadioLink.parse("LINK|NONE|RSSI=0|PROFILE=BALANCED")!!
     check(absent.rssiDbm==null)
     check(RadioLink.parse("READY|node")==null)
     check(RadioLink.parse("LINK||RSSI=-50")==null)
-    check(RadioLink.choices==listOf("AUTO", "SPEED", "RANGE", "LR500", "LR250"))
-    println("PASS: RF telemetry parse / stale peer / manual modes")
+    check(RadioLink.choices==listOf("AUTO","FAST","BALANCED","RANGE"))
+    check(RadioLink.command("FAST")=="PROFILE LOW")
+    check(RadioLink.command("BALANCED")=="PROFILE BALANCED")
+    check(RadioLink.command("RANGE")=="PROFILE MAX")
+    check(RadioLink.command("AUTO")=="AUTO ON")
+    check(RadioLink.command("LR250")==null && RadioLink.command("LR500")==null)
+    check(!RadioLink.requiresHighPower("BALANCED"))
+    check(RadioLink.requiresHighPower("FAST") && RadioLink.requiresHighPower("RANGE") && RadioLink.requiresHighPower("AUTO"))
+    println("PASS: actual SX1278 link telemetry, three radio profiles + Auto, no ESP-NOW speeds")
 }
