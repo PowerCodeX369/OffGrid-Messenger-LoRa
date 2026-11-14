@@ -106,6 +106,15 @@ class MainActivity : ComponentActivity() {
     private var bleAuthenticated = false
     private var mediaMode = "idle" // idle, entering, active, restoring
     private var mediaTimer:Runnable? = null
+    // POWER18 VERIFIED is a local, per-BLE-connection authorization: never persist it.
+    // The app waits for firmware POWER18|ENABLED before requesting any high-PA profile.
+    private var power18Confirmed = false
+    private var powerApprovalRequest by mutableStateOf<String?>(null) // MEDIA or mode
+    private var waitingForPowerAck: String? = null
+    private var powerAckTimer: Runnable? = null
+    private var mediaHintSent = false
+    private var manualAfterAuto: String? = null
+    private var manualAutoTimer: Runnable? = null
     private var fastPhotos by mutableStateOf(true)
     private val bulk by lazy { LoRaNativeBulk(
         write={command -> link?.send(command)},
@@ -221,7 +230,10 @@ class MainActivity : ComponentActivity() {
                 connected=false;loRaCapable=false
                 radioLink=null;bulk.reset();mediaReceiver.clear()
                 pending.firstOrNull()?.let{it.attempts=0}
-                isSending=false;stopMediaTimer();mediaMode="idle"
+                isSending=false;stopMediaTimer();mediaMode="idle";mediaHintSent=false
+                power18Confirmed=false;powerApprovalRequest=null;waitingForPowerAck=null
+                powerAckTimer?.let(mainHandler::removeCallbacks);powerAckTimer=null
+                manualAfterAuto=null;manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
                 if(recording) {
                     recordAutoStop?.let(mainHandler::removeCallbacks);recordAutoStop=null
                     runCatching { voiceRecorder.finish(cancel=true) };recording=false
@@ -239,6 +251,8 @@ class MainActivity : ComponentActivity() {
         recordAutoStop?.let(mainHandler::removeCallbacks)
         mediaWorker.shutdownNow()
         bulk.reset();mediaReceiver.clear();stopMediaTimer()
+        powerAckTimer?.let(mainHandler::removeCallbacks)
+        manualAutoTimer?.let(mainHandler::removeCallbacks)
         scheduledHistory?.let(mainHandler::removeCallbacks)
         val finalSnapshot=items.toList()
         historyWorker.execute { runCatching { history.save(finalSnapshot) } }
@@ -362,33 +376,94 @@ class MainActivity : ComponentActivity() {
     }
 
     private fun stopMediaTimer(){mediaTimer?.let(mainHandler::removeCallbacks);mediaTimer=null}
+    private fun failPendingMedia(reason:String){
+        stopMediaTimer();mediaMode="idle"
+        val job=pending.firstOrNull()
+        if(job!=null && job.media){pending.removeFirst();updateReceipt(job.messageId,"failed")}
+        state=reason
+        startNext()
+    }
+    private fun requestHighPower(action:String){
+        if(power18Confirmed){
+            if(action=="MEDIA")beginMediaSession() else applyRadioMode(action)
+        }else if(powerApprovalRequest==null && waitingForPowerAck==null){
+            powerApprovalRequest=action
+        }
+    }
+    private fun declineHighPower(action:String){
+        powerApprovalRequest=null
+        if(action=="MEDIA"){
+            // A declined confirmation is a conscious choice to use the
+            // working current mode, not a silent claim of Fast handover.
+            mediaHintSent=false;mediaMode="active"
+            state="Media will use the current radio mode"
+            startNext()
+        }
+    }
+    private fun authorizeHighPower(action:String){
+        if(!connected)return
+        powerApprovalRequest=null
+        waitingForPowerAck=action
+        link?.send("POWER18 VERIFIED")
+        powerAckTimer?.let(mainHandler::removeCallbacks)
+        val timeout=Runnable {
+            if(waitingForPowerAck==action){
+                waitingForPowerAck=null
+                if(action=="MEDIA")failPendingMedia("Fast power authorization timed out; retry media")
+                else state="Power authorization timed out; no RF change applied"
+            }
+        }
+        powerAckTimer=timeout;mainHandler.postDelayed(timeout,8_000L)
+    }
+    private fun applyRadioMode(mode:String){
+        if(!connected)return
+        val command=RadioLink.command(mode)?:return
+        if(mode!="AUTO" && radioLink?.rateMode=="AUTO"){
+            // AUTO OFF is an authenticated two-node handshake; never send the
+            // manual profile offer until that handshake has completed.
+            manualAfterAuto=mode
+            link?.send("AUTO OFF")
+            manualAutoTimer?.let(mainHandler::removeCallbacks)
+            val timeout=Runnable {
+                if(manualAfterAuto==mode){manualAfterAuto=null;state="Auto OFF not confirmed; mode unchanged"}
+            }
+            manualAutoTimer=timeout;mainHandler.postDelayed(timeout,12_000L)
+        }else link?.send(command)
+        mainHandler.postDelayed({if(connected)link?.send("STATUS")},2_000L)
+    }
+    private fun chooseRadioMode(mode:String){
+        if(!connected || mode !in RadioLink.choices)return
+        if(isSending || bulk.busy || pending.isNotEmpty() || mediaMode!="idle"){
+            state="Finish outgoing messages and media before changing RF modes"
+            return
+        }
+        if(RadioLink.requiresHighPower(mode))requestHighPower(mode)
+        else applyRadioMode(mode)
+    }
     private fun beginMediaSession(){
-        mediaMode="entering"
+        if(!power18Confirmed){requestHighPower("MEDIA");return}
+        mediaMode="entering";mediaHintSent=true
         link?.send("MEDIA ON")
         stopMediaTimer()
         val timeout=Runnable {
             if(mediaMode=="entering"){
-                mediaMode="idle"
-                // A still-negotiating RF profile cannot safely accept BULKBEGIN.
-                // Fail this media attempt instead of forcing ciphertext onto an
-                // unconfirmed radio frequency/modulation profile.
-                val failed=pending.firstOrNull()
-                if(failed!=null && failed.media){pending.removeFirst();updateReceipt(failed.messageId,"failed")}
                 link?.send("MEDIA OFF")
-                state="Media RF synchronization timed out; retry after both nodes agree"
-                startNext()
+                failPendingMedia("Media RF synchronization timed out; retry after both nodes agree")
             }
         }
         mediaTimer=timeout;mainHandler.postDelayed(timeout,22_000L)
     }
     private fun endMediaSession(){
         if(mediaMode=="idle"){startNext();return}
+        if(!mediaHintSent){
+            mediaMode="idle";startNext();return
+        }
         mediaMode="restoring"
         link?.send("MEDIA OFF")
         stopMediaTimer()
         val timeout=Runnable {
             if(mediaMode=="restoring"){
-                mediaMode="idle"
+                mediaMode="idle";mediaHintSent=false
                 state="RF restore not confirmed; check both nodes' active profiles"
                 startNext()
             }
@@ -441,7 +516,8 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun startNext(){
-        if(!connected||isSending||bulk.busy||mediaMode=="entering"||mediaMode=="restoring")return
+        if(!connected||isSending||bulk.busy||mediaMode=="entering"||mediaMode=="restoring" ||
+           powerApprovalRequest!=null || waitingForPowerAck!=null)return
         val front=pending.firstOrNull()?:return
         if(!front.control && !front.media){
             val receipt=pending.firstOrNull{it.control}
@@ -691,14 +767,54 @@ class MainActivity : ComponentActivity() {
             "LINK" -> radioLink=RadioLink.parse(line)
             "PROFILE","AUTO","MEDIA","POWER18" -> {
                 bleTrace(line.take(180))
-                if(split[0]=="MEDIA"){
-                    if(mediaMode=="entering" && split.getOrNull(1) in listOf("READY","BYPASS","ERROR")){
-                        stopMediaTimer();mediaMode="active";startNext()
-                    }else if(mediaMode=="restoring" && split.getOrNull(1) in
-                         listOf("RESTORED","OFF","RESTORE_FAILED")){
-                        stopMediaTimer();mediaMode="idle"
-                        if(split.getOrNull(1)=="RESTORE_FAILED")state="Restore failed; manually synchronize RF mode"
-                        startNext()
+                val event=split.getOrNull(1)
+                when(split[0]){
+                    "POWER18" -> if(event=="ENABLED"){
+                        powerAckTimer?.let(mainHandler::removeCallbacks);powerAckTimer=null
+                        power18Confirmed=true
+                        val action=waitingForPowerAck;waitingForPowerAck=null
+                        if(action=="MEDIA")beginMediaSession()
+                        else if(action!=null)applyRadioMode(action)
+                    }else if(event=="ERROR"){
+                        powerAckTimer?.let(mainHandler::removeCallbacks);powerAckTimer=null
+                        val action=waitingForPowerAck;waitingForPowerAck=null
+                        power18Confirmed=false
+                        if(action=="MEDIA")failPendingMedia("LoRa high-power authorization rejected: $line")
+                        else state="LoRa high-power authorization rejected"
+                    }
+                    "AUTO" -> {
+                        if(event=="OFF" && manualAfterAuto!=null){
+                            val target=manualAfterAuto!!;manualAfterAuto=null
+                            manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
+                            link?.send(RadioLink.command(target)!!)
+                        }else if(event=="ERROR" && manualAfterAuto!=null){
+                            manualAfterAuto=null
+                            manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
+                            state="Cannot leave Auto mode: $line"
+                        }
+                    }
+                    "MEDIA" -> {
+                        when {
+                            mediaMode=="entering" && event=="READY" -> {
+                                stopMediaTimer();mediaMode="active";startNext()
+                            }
+                            mediaMode=="entering" && event=="BYPASS" -> {
+                                // Firmware explicitly declined the Fast handover;
+                                // media can still use its verified existing profile.
+                                stopMediaTimer();mediaMode="active"
+                                state="Fast unavailable (${split.getOrNull(2) ?: "RF conditions"}); sending at current mode"
+                                startNext()
+                            }
+                            mediaMode=="entering" && event=="ERROR" -> {
+                                link?.send("MEDIA OFF")
+                                failPendingMedia("Media synchronization rejected: $line")
+                            }
+                            mediaMode=="restoring" && event in listOf("RESTORED","OFF","RESTORE_FAILED") -> {
+                                stopMediaTimer();mediaMode="idle";mediaHintSent=false
+                                if(event=="RESTORE_FAILED")state="Restore failed; manually synchronize both RF modes"
+                                startNext()
+                            }
+                        }
                     }
                 }
             }
@@ -891,22 +1007,7 @@ class MainActivity : ComponentActivity() {
                         else reconnectIfPermitted()
                     },
                     disconnect={link?.stop();state="Disconnected";radioLink=null},
-                    setRadioMode={mode ->
-                        if(connected && mode in RadioLink.choices) {
-                            // Preserve every original UI choice, translate its
-                            // old ESP-NOW rate label into a LoRa profile command.
-                            val command=when(mode){
-                                "AUTO"->"AUTO ON"
-                                "SPEED","LR500"->"PROFILE LOW"
-                                "RANGE"->"PROFILE MAX"
-                                "LR250"->"PROFILE BALANCED"
-                                else->"STATUS"
-                            }
-                            link?.send(command)
-                            // A LINK response reports the applied mode; do not fake the result.
-                            mainHandler.postDelayed({if(connected)link?.send("STATUS")},450)
-                        }
-                    },
+                    setRadioMode=::chooseRadioMode,
                     batterySettings={
                         val intent=Intent(Settings.ACTION_APPLICATION_DETAILS_SETTINGS,
                             Uri.parse("package:$packageName"))
@@ -953,6 +1054,18 @@ class MainActivity : ComponentActivity() {
                     },retry=::retryFailed
                 )
             )
+            if(powerApprovalRequest!=null) {
+                val requested=powerApprovalRequest!!
+                AlertDialog(
+                    onDismissRequest={declineHighPower(requested)},
+                    title={Text("LoRa 18 dBm confirmation")},
+                    text={Text("Fast and Max Range use nominal +18 dBm. Confirm BOTH ESP32 radio boards have suitable antennas, stable 3.3 V supplies, and that this transmit power is permitted where you operate. The receiving board will follow the authenticated RF switch automatically.")},
+                    confirmButton={TextButton(onClick={authorizeHighPower(requested)}){Text("Confirm both boards")}},
+                    dismissButton={TextButton(onClick={declineHighPower(requested)}){
+                        Text(if(requested=="MEDIA")"Use current mode" else "Cancel")
+                    }}
+                )
+            }
             if(showKey) {
                 AlertDialog(onDismissRequest={if(pairingSaved)showKey=false},
                     title={Text("Secure node pairing")},
