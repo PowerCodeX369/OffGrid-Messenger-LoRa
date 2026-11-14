@@ -23,13 +23,13 @@
    if(this.active){const a=this.active;this.active=null;if(a.waiter){a.waiter.reject(Error(reason));a.waiter=null;}a.rejectFinal(Error(reason));}
    this.rx=null;
   }
-  async send(id,ciphertext,priority,{onSent=()=>{},onProgress=()=>{}}={}){
+  async send(id,ciphertext,priority,{onSent=()=>{},onProgress=()=>{},media=false}={}){
    id=String(id).toUpperCase();
    if(this.closed||this.active)throw Error('LoRa bulk connection busy or disconnected');
    if(!HEX.test(id)||id.slice(0,8)==='00000000'||id.slice(8)==='00000000'||
       !(ciphertext instanceof Uint8Array)||ciphertext.length<28||ciphertext.length>MAX)
     throw Error('Invalid encrypted LoRa bulk transfer');
-   const a={id,priority,waiter:null,onSent,onProgress,sent:false,done:false,resolveFinal:null,rejectFinal:null,started:performance.now(),stagedAt:0,radioStats:null};
+   const a={id,priority,media:!!media,waiter:null,onSent,onProgress,sent:false,done:false,resolveFinal:null,rejectFinal:null,started:performance.now(),stagedAt:0,radioStats:null};
    const final=new Promise((resolve,reject)=>{a.resolveFinal=resolve;a.rejectFinal=reject;});
    /* A rejected terminal promise can arrive while stage writes are pending.
     * Attach a handler immediately so browsers do not report unhandled rejects. */
@@ -50,11 +50,11 @@
       * BULKFAILED at ANY stage still rejects the pending waiter. No RF or
       * encryption behavior changes. The whole write is < 512 bytes. */
      const crc=hex32(crc32(ciphertext));
-     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}\n`+
+     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':a.media?'MEDIA':'DATA'}\n`+
        `BULKCHUNK ${id} 0 ${asHex(ciphertext)}\n`+
        `BULKEND ${id} ${crc}`,'BULKQUEUED');
     }else{
-     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':'DATA'}`,'BULKREADY');
+     await sendStage(`BULKBEGIN ${id} ${ciphertext.length} ${priority?'CTRL':a.media?'MEDIA':'DATA'}`,'BULKREADY');
     /* Bounded 8-line USB write (< 3 KiB), below the firmware's 4-KiB IRQ RX buffer.
      * The radio task processes each chunk in
      * strict sequence and replies at four-line checkpoints. We await the
@@ -73,7 +73,12 @@
     }
     a.stagedAt=performance.now();
     /* Timeout scales with Max/Range airtime and 32 possible fragments. */
-    const ms=22000+Math.ceil(ciphertext.length/224)*4500;
+    /* In SF12, each 48..96 B authenticated RF fragment and bitmap ACK
+     * takes seconds. Never mark a valid long-range transfer as failed using
+     * Fast-mode timeouts. The radio worker retains the actual ACK authority. */
+    const ultra=!!root.OffGridUltraActive?.();
+    const ms=ultra?45000+Math.ceil(ciphertext.length/48)*14000:
+      22000+Math.ceil(ciphertext.length/224)*4500;
     const timeout=setTimeout(()=>a.rejectFinal(Error('LoRa bitmap ACK transfer unconfirmed')),ms);
     try{await final;this.stats.confirmed++;}finally{clearTimeout(timeout);}
     return Object.freeze({usbStageMs:a.stagedAt-a.started,

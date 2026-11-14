@@ -15,7 +15,8 @@ let localMac=null,secretKey=null,peerMac=null,activeContact='Nearby node',firmwa
  * existing-profile radio frames, and both peers revert if not confirmed. */
 let currentProfile='BALANCED', profileTransition=false, autoMode=false, autoBusy=false;
 let profileRadio={sf:7,bw:250000,power:10};
-const profileLabels={LOW:'Fast / Nominal 18 dBm',BALANCED:'Balanced',MAX:'Max Power / Range'};
+globalThis.OffGridUltraActive=()=>currentProfile==='ULTRA';
+const profileLabels={LOW:'Fast / Nominal 18 dBm',BALANCED:'Balanced',MAX:'Max Power / Range',ULTRA:'Ultra Long Range · text only'};
 let highPaVerified=false;
 let mediaResponseWaiter=null;
 
@@ -324,12 +325,13 @@ function refreshStatus(){
  $('connectionDescription').textContent=verified?(localMac+' · SX1278 LoRa · protocol 2'):port?(usbHandshakeIssue||'Waiting for ESP32 READY'):'Connect your ESP32-C3 over USB';
  $('nodeAddress').textContent='Node: '+(localMac||'—');
  $('connectButton').disabled=!!port;$('disconnectButton').disabled=!port;
- $('messageInput').disabled=!ready;$('attachments').disabled=!ready;$('photoPicker').disabled=!ready;$('voiceButton').disabled=!ready;
+ $('messageInput').disabled=!ready;const textOnly=currentProfile==='ULTRA';
+ $('attachments').disabled=!ready||textOnly;$('photoPicker').disabled=!ready||textOnly;$('voiceButton').disabled=!ready||textOnly;
  $('messageInput').placeholder=ready?'Message (up to 500 characters)':verified?'Pair a 256-bit key to begin':'Connect ESP32 to send messages';
  $('chatSubhead').textContent=ready?'End-to-end encrypted · SX1278 LoRa':verified?'Pair a key to start encrypted chat':'Offline · connect ESP32';
  $('securityIcon').textContent=ready?'🔒':'♢';
  $('securityLabel').textContent=ready?'AES-256-GCM enabled · manage pairing':verified?'Encryption key required · set up pairing':'Connect to configure encryption';
- $('composerStatus').textContent=ready?'Encrypted text / photos / voice · LoRa v1.8':verified?'Pair the same key on both browsers to begin':'Connect an ESP32 using the sidebar';
+ $('composerStatus').textContent=ready?(currentProfile==='ULTRA'?'Ultra SF12 · encrypted TEXT ONLY · media disabled':'Encrypted text / photos / voice · LoRa v1.8'):verified?'Pair the same key on both browsers to begin':'Connect an ESP32 using the sidebar';
  updateByteCount();updateLinkBadge();
 }
 function setName(name){activeContact=(name||'Nearby node').slice(0,36);$('contactSidebarName').textContent=activeContact;$('chatName').textContent=activeContact;const initial=Array.from(activeContact)[0]?.toUpperCase()||'N';$('contactAvatar').textContent=initial;$('headerAvatar').textContent=initial;updateContactAvatar();}
@@ -1004,6 +1006,7 @@ function onMediaLine(line){
  if(mediaResponseWaiter?.accepted.has(kind))mediaResponseWaiter.finish(line);
 }
 async function beginMediaFastSession(){
+ if(currentProfile==='ULTRA')throw Error('Ultra Long Range is encrypted text only. Select Max Range to send media.');
  // Do not start a media send while an unrelated manual/Auto profile change
  // is still being authenticated. A timeout leaves the chat retryable.
  if(profileTransition){
@@ -1045,6 +1048,7 @@ async function endMediaFastSession(){
  * Retry only a failed segment; the receiver deduplicates identical parts.
  * Both ESP32s remain free to negotiate AUTO changes at segment boundaries. */
 async function transferMedia(job){
+ if(currentProfile==='ULTRA')throw Error('Ultra Long Range is text only; media transfer is disabled');
  const r=job.record;
  if(!r?.bytes)throw Error('No encrypted media bytes available');
  const pieces=await Media.split(r.kind,r.mime,r.bytes),w=r.kind==='voice'?r.durationMs&0xffff:r.width,
@@ -1063,6 +1067,7 @@ async function transferMedia(job){
   try{await beginMediaFastSession();}
   finally{perf.preflight=performance.now()-preflightStart;}
   for(let i=0;i<pieces.length;i++){
+   if(currentProfile==='ULTRA')throw Error('Auto entered Ultra; media paused. Retry after returning to Max Range.');
    if(r.cancelRequested)throw Error('Media transfer paused by user; tap to retry');
    if(!verified||!secretKey)throw Error('Disconnected; media is available to retry');
    const part=pieces[i];let complete=false,lastError;
@@ -1125,6 +1130,7 @@ async function transferFragments(packet,job){
  job.totalFrames=frames;job.transmitted=new Set();
  job.bulkMetrics=await rfScheduler.submit(job.control?'receipt':'data',()=>bulkLink.send(
     packet.transferId,packet.ciphertext,Boolean(job.control),{
+      media:Boolean(job.mediaSegment),
       onSent:()=>{
         if(job.record&&!job.mediaSegment)void setState(job.record,'sent');
       },
@@ -1214,7 +1220,8 @@ async function runTransfers(){
 function onProfileLine(line){
  const parts=line.split('|'),type=parts[1],mode=parts[2];
  if(type==='ACTIVE'||type==='ROLLED_BACK'){
-   if(['LOW','BALANCED','MAX'].includes(mode))currentProfile=mode;
+   if(['LOW','BALANCED','MAX','ULTRA'].includes(mode))currentProfile=mode;
+   refreshStatus();
    const values={};for(const field of parts.slice(3)){
      const i=field.indexOf('=');if(i>0)values[field.slice(0,i)]=field.slice(i+1);
    }
@@ -1274,7 +1281,7 @@ async function requestAutoMode(enable){
  * radio control request; the initiating user checks BOTH devices before PA18.
  * Never throw away normal outgoing text just to make a mode switch succeed. */
 async function requestProfileChange(mode){
- if(!['LOW','BALANCED','MAX'].includes(mode))return;
+ if(!['LOW','BALANCED','MAX','ULTRA'].includes(mode))return;
  if(!verified||!writer||!secretKey){toast('Connect and pair the ESP32 first');return;}
  if(profileTransition){toast('A profile change is already in progress');return;}
  if(speedDiagnostics.busy){toast('Finish the speed test before changing modes');return;}
@@ -1282,7 +1289,7 @@ async function requestProfileChange(mode){
     rfScheduler.depth||urgentReceipts.length||bulkLink?.active);
  if(busy){toast('Wait until pending messages and receipts finish, then change mode');return;}
  if(mode===currentProfile&&!autoMode){toast(`Already using ${profileLabels[mode]}`);return;}
- const high=(mode==='LOW'||mode==='MAX');
+ const high=(mode==='LOW'||mode==='MAX'||mode==='ULTRA');
  if(high){
   if(!confirm('I have checked BOTH ESP32 radio boards, their matched 433 MHz antennas, stable 3.3 V supplies under TX load, hardware limits and local RF permissions. Authorize nominal +18 dBm on BOTH radios and coordinate the change with one click?'))return;
  }
@@ -1307,7 +1314,8 @@ function showProfileDialog(){showDialog('Automatic + manual LoRa modes',body=>{
  const entries=[
   ['LOW','Fast / Nominal 18 dBm','SF7 · 500 kHz · +18 dBm (special PA_DAC; both boards must be checked)'],
   ['BALANCED','Balanced','SF7 · 250 kHz · +10 dBm · default at boot'],
-  ['MAX','Max Power / Range','SF9 · 125 kHz · nominal +18 dBm; slower, higher sensitivity']
+  ['MAX','Max Power / Range','SF9 · 125 kHz · nominal +18 dBm; original range profile'],
+  ['ULTRA','Ultra Long Range · TEXT ONLY','SF12 · 125 kHz · nominal +18 dBm; photos and voice disabled']
  ];
  for(const [value,name,details] of entries){
    const row=el('div','profile-mode-choice');
@@ -1357,7 +1365,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  }
  if(s.startsWith('RATE_ERROR|')){console.warn('Radio PHY configuration:',s);toast('ESP32 PHY rate could not be applied; falling back to safe rate.');return;}
  if(s.startsWith('RATE|')||s.startsWith('PEER|'))return;
- if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('MEDIAFAST=1')||!parts.includes('FW=1.8.0-rc.4')||!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=3')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')||!parts.includes('MEDIA=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.8.0-rc.4 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
+ if(s.startsWith('READY|')){const parts=s.split('|');speedDiagnostics.capable=parts.includes('DIAG=1');speedDiagnostics.sackCapable=parts.includes('SACK=1');if(!parts.includes('MEDIAFAST=1')||!parts.includes('ULTRA=SF12_TEXT_ONLY')||!parts.includes('FW=1.8.0-rc.4')||!parts.includes('PROTO=2')||!parts.includes('CAP=180')||!parts.includes('STABLE=1')||!parts.includes('NVSKEY=1')||!parts.includes('ACKENGINE=2')||!parts.includes('FLOW=2')||!parts.includes('PROFILES=4')||!parts.includes('SYNC=ONE_CLICK')||!parts.includes('AUTORF=1')||!parts.includes('ARQ=1')||!parts.includes('BULK=1')||!parts.includes('USBPIPE=4')||!parts.includes('MEDIA=1')){if(!firmwareMismatchNotified){toast('Wrong ESP32 firmware protocol; open Diagnostics to see its READY response.');firmwareMismatchNotified=true;}showUsbHint('Expected LoRa v1.8.0-rc.4 firmware on BOTH ESP32s: FLOW=2, ACKENGINE=2, PROTO=2, FAMILY=LORA.');console.warn('Incompatible firmware READY:',s);return;}const mac=parts[1];if(!/^[0-9A-Fa-f:]{17}$/.test(mac))return;if(!parts.includes('FAMILY=LORA')){toast('Wrong firmware: connect an OffGrid Messenger LoRa node.');return;}if(verified&&localMac===mac)return;void onReady(mac);return;}
  if(s.startsWith('QUEUED|')){const [,session,id,hex]=s.split('|'),slot=radioByHex.get(hex);if(slot){slot.wire=`${session}:${id}`;radioByWire.set(slot.wire,slot);}return;}
  if(s.startsWith('RX|')){const [,mac,session,id,data]=s.split('|');if(mac&&session&&id&&data)void processRx(mac,session,id,data);return;}
  if(/^(SENT|RADIOACK|DELIVERED|FAILED|RETRY|RADIO_ERROR)\|/.test(s)){const [type,session,id,extra]=s.split('|');if(type==='RADIO_ERROR'){console.warn('LoRa:',extra);if(radioTelemetry.txfail<=2)toast('Radio send issue: '+extra+' — check Radio diagnostics in Settings.');}else onRadio(type,session,id,extra);return;}
@@ -1452,7 +1460,7 @@ async function preparePhoto(file){if(!file||!file.type.startsWith('image/'))thro
   return candidate;
  }finally{bitmap.close?.();}
 }
-async function sendPhoto(file){if(!verified||!secretKey)return;toast('Preparing photo and stripping metadata…');
+async function sendPhoto(file){if(currentProfile==='ULTRA'){toast('Ultra SF12 is text only. Photos are disabled.');return;}if(!verified||!secretKey)return;toast('Preparing photo and stripping metadata…');
  try{const photo=await preparePhoto(file);if(!verified||!secretKey)throw Error('Disconnected while preparing image');
  if(transferQueue.length>=MAX_TEXT_QUEUE)throw Error('Media queue full');
  const r={id:P.newId(),kind:'image',dir:'out',ts:Date.now(),mime:photo.mime,width:photo.width,height:photo.height,bytes:photo.bytes,status:'sending',progress:0};
@@ -1474,7 +1482,7 @@ function voiceButtonState(){
   const elapsed=Math.min(MAX_VOICE_MS,Date.now()-currentVoiceRecording.started);
   $('composerStatus').textContent=`🔴 Recording voice · ${Math.floor(elapsed/1000)}s · ${formatBytes(currentVoiceRecording.capturedBytes)} / 40 KiB · tap mic to send`;
  }else if(verified&&secretKey){
-  $('composerStatus').textContent='Encrypted media · LoRa v1.8';
+  $('composerStatus').textContent=currentProfile==='ULTRA'?'Ultra SF12 · encrypted TEXT ONLY':'Encrypted media · LoRa v1.8';
  }
  updatePrimaryAction();
 }
@@ -1486,6 +1494,7 @@ function stopVoiceRecording(cancel=false){
  }
 }
 async function toggleVoiceRecording(){
+ if(currentProfile==='ULTRA'&&!currentVoiceRecording){toast('Ultra SF12 is text only. Voice notes are disabled.');return;}
  if(currentVoiceRecording){stopVoiceRecording();return;}
  if(!verified||!secretKey){toast('Connect and pair both ESP32s before recording.');return;}
  if(!navigator.mediaDevices?.getUserMedia||!globalThis.MediaRecorder){toast('Microphone recording requires Chromium on localhost or HTTPS.');return;}

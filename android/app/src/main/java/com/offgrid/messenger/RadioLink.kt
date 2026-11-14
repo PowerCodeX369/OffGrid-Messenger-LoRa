@@ -21,6 +21,7 @@ data class RadioLink(
         "FAST" -> "SF7 / BW500"
         "BALANCED" -> "SF7 / BW250"
         "RANGE" -> "SF9 / BW125"
+        "ULTRA" -> "SF12 / BW125"
         "AUTO" -> "SX1278 LoRa adaptive"
         else -> "SX1278 LoRa"
     }
@@ -28,21 +29,23 @@ data class RadioLink(
         "FAST" -> "Fast"
         "BALANCED" -> "Balanced"
         "RANGE" -> "Max Range"
+        "ULTRA" -> "Ultra Long Range"
         "AUTO" -> "Auto (adaptive)"
         else -> "Unknown"
     }
     val summary: String get() = "$signalLabel · $phyLabel · $modeLabel"
 
     companion object {
-        val choices: List<String> = listOf("AUTO", "FAST", "BALANCED", "RANGE")
+        val choices: List<String> = listOf("AUTO", "FAST", "BALANCED", "RANGE", "ULTRA")
         fun command(mode: String): String? = when (mode) {
             "AUTO" -> "AUTO ON"
             "FAST" -> "PROFILE LOW"
             "BALANCED" -> "PROFILE BALANCED"
             "RANGE" -> "PROFILE MAX"
+            "ULTRA" -> "PROFILE ULTRA"
             else -> null
         }
-        fun requiresHighPower(mode: String): Boolean = mode in setOf("AUTO", "FAST", "RANGE")
+        fun requiresHighPower(mode: String): Boolean = mode in setOf("AUTO", "FAST", "RANGE", "ULTRA")
         fun parse(line: String): RadioLink? {
             if (!line.startsWith("LINK|")) return null
             val fields = line.split('|')
@@ -64,12 +67,13 @@ data class RadioLink(
                 values["PROFILE"] == "LOW" -> "FAST"
                 values["PROFILE"] == "BALANCED" -> "BALANCED"
                 values["PROFILE"] == "MAX" -> "RANGE"
+                values["PROFILE"] == "ULTRA" -> "ULTRA"
                 else -> "UNKNOWN"
             }
             return RadioLink(peer, dbm, values["PHY"] ?: "", values["PHYMODE"] ?: "",
                 mode, values["PROFILE_CHANGES"]?.toLongOrNull() ?: values["CHANGES"]?.toLongOrNull(),
                 age,
-                when(values["PROFILE"]){"LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";else->"UNKNOWN"})
+                when(values["PROFILE"]){"LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";"ULTRA"->"ULTRA";else->"UNKNOWN"})
         }
     }
 }

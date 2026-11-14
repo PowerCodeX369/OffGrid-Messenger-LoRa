@@ -435,7 +435,9 @@ class MainActivity : ComponentActivity() {
             }
         }
         requestedRadioTimer=timeout
-        mainHandler.postDelayed(timeout,24_000L)
+        // A signed SF12 exchange can require multiple seconds of airtime per
+        // OFFER/AGREE/HELLO. Do not tell the user it failed after 24 seconds.
+        mainHandler.postDelayed(timeout,if(mode=="ULTRA" || radioLink?.activeProfile=="ULTRA") 90_000L else 24_000L)
     }
     private fun clearRadioRequest(){
         requestedRadioMode=null
@@ -455,7 +457,8 @@ class MainActivity : ComponentActivity() {
             val timeout=Runnable {
                 if(manualAfterAuto==mode){manualAfterAuto=null;state="Auto OFF not confirmed; mode unchanged"}
             }
-            manualAutoTimer=timeout;mainHandler.postDelayed(timeout,12_000L)
+            manualAutoTimer=timeout;mainHandler.postDelayed(timeout,
+                if(radioLink?.activeProfile=="ULTRA") 60_000L else 12_000L)
         }else emitRadioCommand(mode)
         mainHandler.postDelayed({if(connected)link?.send("STATUS")},2_000L)
     }
@@ -469,6 +472,7 @@ class MainActivity : ComponentActivity() {
         else applyRadioMode(mode)
     }
     private fun beginMediaSession(){
+        if(radioLink?.activeProfile=="ULTRA"){failPendingMedia("Ultra SF12 is text only. Leave Ultra before media");return}
         if(!power18Confirmed){requestHighPower("MEDIA");return}
         mediaMode="entering";mediaHintSent=true
         link?.send("MEDIA ON")
@@ -552,9 +556,15 @@ class MainActivity : ComponentActivity() {
             if(receipt!=null){pending.remove(receipt);pending.addFirst(receipt)}
         }
         val job=pending.firstOrNull()?:return
+        if(job.media && radioLink?.activeProfile=="ULTRA") {
+            pending.removeFirst();updateReceipt(job.messageId,"failed")
+            state="Ultra SF12 is text only; media was cancelled when the RF mode changed"
+            if(mediaMode!="idle")endMediaSession() else startNext()
+            return
+        }
         if(job.media && mediaMode=="idle"){beginMediaSession();return}
         isSending=true
-        try{bulk.start(job.frames[job.index],job.control)}catch(e:Exception){
+        try{bulk.start(job.frames[job.index],job.control,job.media,radioLink?.activeProfile=="ULTRA")}catch(e:Exception){
             isSending=false;state="LoRa staging unavailable: ${e.message}"
             pending.removeFirst()
             if(!job.control)updateReceipt(job.messageId,"failed")
@@ -565,6 +575,7 @@ class MainActivity : ComponentActivity() {
         val key=secure.readPairingKey() ?: run{state="Pairing key required";return}
         try{
             val media=(kind==OgmCodec.IMAGE || kind==OgmCodec.VOICE)
+            if(media && radioLink?.activeProfile=="ULTRA")throw IllegalStateException("Ultra is encrypted text only")
             val parts:List<LoRaNativeProtocol.Sealed> = if(media){
                 val mime=if(kind==OgmCodec.IMAGE)listOf("image/webp","image/png","image/jpeg")
                     .getOrNull(body[0].toInt() and 255) else listOf("audio/webm","audio/ogg","audio/mp4")
@@ -590,6 +601,7 @@ class MainActivity : ComponentActivity() {
         pushEnvelope(OgmCodec.TEXT,id,value.toByteArray(Charsets.UTF_8))
     }
     private fun sendPhoto(uri:Uri) {
+        if(radioLink?.activeProfile=="ULTRA"){state="Ultra SF12 is text only. Photos are disabled";return}
         // In-app CameraX captures only temporary JPEGs in our own cache.
         // Gallery/content URIs are never deleted.
         val capturedFile=if(uri.scheme=="file") uri.path?.let(::File)?.takeIf {
@@ -621,6 +633,7 @@ class MainActivity : ComponentActivity() {
         }
     }
     private fun startVoiceRecording() {
+        if(radioLink?.activeProfile=="ULTRA"){state="Ultra SF12 is text only. Voice notes are disabled";return}
         if(!connected){state="Connect to record";return}
         try {
             voiceRecorder.start();recording=true
@@ -834,7 +847,7 @@ class MainActivity : ComponentActivity() {
                             Toast.makeText(this, state, Toast.LENGTH_LONG).show()
                         }else if(event=="ACTIVE"){
                             val actual=when(split.getOrNull(2)){
-                                "LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";else->null
+                                "LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";"ULTRA"->"ULTRA";else->null
                             }
                             if(actual!=null && actual==requestedRadioMode){
                                 clearRadioRequest();state="Both radios synchronized: $actual"

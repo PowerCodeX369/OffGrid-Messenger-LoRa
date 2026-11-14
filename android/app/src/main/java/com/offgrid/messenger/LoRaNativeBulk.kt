@@ -12,7 +12,7 @@ class LoRaNativeBulk(
     private val progress:(Int,Int)->Unit,
     private val received:(String,String,ByteArray)->Unit
 ){
-    private data class Tx(val id:String,val data:ByteArray,val ctrl:Boolean,var state:String="begin",var seq:Int=0,var sent:Boolean=false)
+    private data class Tx(val id:String,val data:ByteArray,val ctrl:Boolean,var state:String="begin",var seq:Int=0,var sent:Boolean=false,var ultra:Boolean=false)
     private data class Rx(val id:String,val mac:String,val bytes:ByteArray,var seq:Int=0,var offset:Int=0)
     private var tx:Tx?=null
     private var rx:Rx?=null
@@ -29,12 +29,12 @@ class LoRaNativeBulk(
         timer?.let(cancel);timer=null
         tx=null;completed(ok,reason)
     }
-    fun start(sealed:LoRaNativeProtocol.Sealed,control:Boolean){
+    fun start(sealed:LoRaNativeProtocol.Sealed,control:Boolean,media:Boolean=false,ultra:Boolean=false){
         require(tx==null && sealed.ciphertext.size in 28..LoRaNativeProtocol.MAX_BULK)
         require(sealed.transferId.matches(Regex("[0-9A-F]{16}")) &&
           sealed.transferId.substring(0,8)!="00000000" && sealed.transferId.substring(8)!="00000000")
-        tx=Tx(sealed.transferId,sealed.ciphertext,control)
-        write("BULKBEGIN ${sealed.transferId} ${sealed.ciphertext.size} ${if(control)"CTRL" else "DATA"}")
+        tx=Tx(sealed.transferId,sealed.ciphertext,control,ultra=ultra)
+        write("BULKBEGIN ${sealed.transferId} ${sealed.ciphertext.size} ${if(control)"CTRL" else if(media)"MEDIA" else "DATA"}")
         watch(12_000)
     }
     private fun sendBatch(t:Tx){
@@ -70,7 +70,8 @@ class LoRaNativeBulk(
                 }
             }
             "BULKQUEUED"->if(t.state=="end"){
-                t.state="radio";watch(22_000+((t.data.size+223)/224)*4_500L)
+                t.state="radio";watch(if(t.ultra)45_000+((t.data.size+47)/48)*14_000L
+                                 else 22_000+((t.data.size+223)/224)*4_500L)
             }
             "BULKSENT"->{if(!t.sent){t.sent=true;transmitted()}}
             "BULKPROGRESS"->{val n=p.getOrNull(2)?.toIntOrNull();val count=p.getOrNull(3)?.toIntOrNull();if(n!=null&&count!=null&&count>0)progress(n,count)}

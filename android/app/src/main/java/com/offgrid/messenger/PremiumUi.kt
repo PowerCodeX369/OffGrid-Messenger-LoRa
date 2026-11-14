@@ -444,7 +444,8 @@ private fun ChatTopBar(dark:Boolean,connected:Boolean,status:String,radioLink:Ra
                         DropdownMenuItem(
                             text={Text(when(mode){
                                 "AUTO"->"Auto (adaptive)";"FAST"->"Fast · SF7 / 500 kHz"
-                                "BALANCED"->"Balanced · SF7 / 250 kHz";else->"Max Range · SF9 / 125 kHz"})},
+                                "BALANCED"->"Balanced · SF7 / 250 kHz"
+                                "RANGE"->"Max Range · SF9 / 125 kHz";else->"Ultra Long Range · SF12 · TEXT only"})},
                             leadingIcon={if(radioLink?.rateMode==mode)Icon(Icons.Default.Check,null)},
                             enabled=connected,
                             onClick={menuOpen=false;onRateMode(mode)}
