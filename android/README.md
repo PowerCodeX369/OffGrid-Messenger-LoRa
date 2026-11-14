@@ -1,3 +1,5 @@
+> **v3.0.4-rc.1 native Android Ultra mode:** new `Ultra Long Range · SF12 · TEXT only` radio menu entry. Original Compose chat UI, BLE GATT pairing, 48 KiB photos/40 KiB voice in other profiles, receipts and history remain. In Ultra only encrypted text and receipts are supported; media controls are blocked. Both ESP32s need v3.0.4 firmware for authenticated Ultra mode negotiation. Build with Android Studio; host tests do not create a tested APK. See [`V3_0_4_ULTRA_LONG_RANGE.md`](../docs/V3_0_4_ULTRA_LONG_RANGE.md).
+
 > **v3.0.3-rc.1 source:** build the native app with versionCode 303; fixes Auto/manual failure visibility and stale LoRa RSSI. Original Compose layouts remain unchanged. Companion firmware on BOTH ESP32s is needed for early weak-link switching. [Details](../docs/ANDROID_RF_RANGE_V3_0_3.md).
 
 # OffGrid Messenger Android — original native app, LoRa transport

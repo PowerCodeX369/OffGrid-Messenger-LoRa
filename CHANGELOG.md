@@ -1,3 +1,11 @@
+## v3.0.4-rc.1 — SF12 Ultra Long Range integrated into v3.0.3 (2026-11-14)
+
+- Add **fourth manual RF profile** `ULTRA` SF12/BW125/CR4/5 at verified nominal 18 dBm; Auto can enter Ultra on weak bidirectional metrics. Existing SF9 Max Range remains exactly SF9/BW125 with the same power setting.
+- ARQ ultra-specific 48/64/80/96-byte HMAC-signed fragments, small weak-link ACK windows, extended authenticated retry and SF12 airtime-driven timeouts; original non-Ultra 224-byte transfer and codecs unchanged.
+- Reject tagged photos/voice in Ultra at native Android UI, web UI, media queue and firmware command path. Continue encrypted text, delivered/read receipts and profile control.
+- Negotiate new authenticated peer `ARQ_CAPS=2` before manual/Auto Ultra; maintain signed OFFER/AGREE and rollback, longer Ultra verification and Android profile response patience.
+- Host-tested firmware radio mode, ARQ (including lost data and bitmap ACK), policy calculations, native Android codec, browser crypto and media restrictions. Real ESP-IDF/Android target builds, RF field tests and legal duty compliance remain outstanding. See `docs/V3_0_4_ULTRA_LONG_RANGE.md`.
+
 ## v3.0.3-rc.1 — Early LoRa Range switching and true RF-link status (Android + firmware)
 
 - Field-tuned proactive two-node Auto RF downgrade ahead of the observed -100 dBm delivery failure; keep signed handshake, rollback and manual control.

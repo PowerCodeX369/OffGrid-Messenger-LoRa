@@ -1,3 +1,10 @@
+## v3.0.4-rc.1 Ultra security and reliability limitations
+
+- **SF12 Ultra permits encrypted text and encrypted delivered/read receipts only.** The supplied native/web clients reject media at enqueue and before RF stage; firmware rejects correctly tagged MEDIA bulk commands and `MEDIA ON`. Because OGM4 payloads are ciphertext to the ESP32, deliberately mislabelled DATA from an untrusted custom client cannot be classified at the radio. This is an official-client feature restriction, not a cryptographic payload-type firewall.
+- New Ultra RF data/bitmap frames and fragment-length metadata remain HMAC-SHA256-128 authenticated; application text/receipts still use AES-256-GCM. Both peers must advertise an **authenticated** Ultra ARQ capability before the signed two-board mode negotiation. Old peers cannot silently join an incompatible SF12 mode.
+- Short packets and longer retries improve tolerance of RF loss but **do not guarantee delivery** without a decodable two-way radio link. SF12 greatly increases airtime; obey local band, output power, antenna and duty-cycle rules. No new +22 dBm mode.
+- Persistent replay protection across firmware reboots, independent crypto audit, physical range and full Android/ESP-IDF target build remain outstanding.
+
 ## Android native LoRa v3.0.1-rc.1 security boundaries (current)
 
 - The **original native Compose app** is the launcher again. There is **no WebView UI, web-to-native JavaScript bridge, or USB-OTG connection screen** in v3.0.1. The original BLE HMAC challenge/response, Android Keystore-wrapped 32-byte pairing key, and native encrypted history remain.

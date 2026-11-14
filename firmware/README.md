@@ -1,3 +1,5 @@
+> **v3.0.4-rc.1 Ultra companion:** signed synchronized `OG_MODE_ULTRA=4`, SF12/BW125 plus LDRO, text-only tagged transfer policy and Ultra-specific authenticated ARQ/ACK windows, retry and TxDone timing. SF9 remains unchanged. Flash both boards together after backing up NVS/firmware; no erase. The existing browser `FW=1.8.0-rc.4` identifier remains for strict wire compatibility but `PROFILES=4`/`ULTRA=SF12_TEXT_ONLY` signal the new build. Full target ESP-IDF build and hardware tests still required. [Acceptance guide](../docs/V3_0_4_ULTRA_LONG_RANGE.md).
+
 > **RF policy EARLY88 (Android v3.0.3 companion):** AUTO is opt-in, requires explicit legal/hardware authorization for nominal 18 dBm. Aggressive downgrades are authenticated and synchronized; web `READY` base FW identifier remains 1.8.0-rc.4 for strict client compatibility. Verify `RF_POLICY=EARLY88` and read [field test procedure](../docs/ANDROID_RF_RANGE_V3_0_3.md).
 
 # Firmware v1.8.0-rc.1 — LoRa media-capable bridge
