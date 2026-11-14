@@ -15,6 +15,12 @@ fun main() {
     check(legacy.rateMode=="UNKNOWN" && legacy.phyLabel=="SX1278 LoRa")
     val lost=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-58|PROFILE=LOW|REGAGE=20000")!!
     check(lost.signalLabel=="Peer not heard")
+    val stale=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-98|PEER_AGE_MS=31000|RFHEARD=0|PROFILE=LOW|AUTO=1")!!
+    check(stale.rssiDbm==null && stale.signalLabel=="LoRa peer silent")
+    val freshWeak=RadioLink.parse("LINK|AA:BB:CC:DD:EE:FF|RSSI=-91|PEER_AGE_MS=2300|RFHEARD=1|PROFILE=MAX|AUTO=1")!!
+    check(freshWeak.rssiDbm==-91 && freshWeak.rateMode=="AUTO" && freshWeak.activeProfile=="RANGE")
+    val oldLinkWithoutAge=RadioLink.parse("LINK|14:63:93:C2:F3:3C|RSSI=-52|PROFILE=BALANCED|AUTO=0")!!
+    check(oldLinkWithoutAge.rssiDbm==-52) // backward compatibility with rc.4
     val absent=RadioLink.parse("LINK|NONE|RSSI=0|PROFILE=BALANCED")!!
     check(absent.rssiDbm==null)
     check(RadioLink.parse("READY|node")==null)

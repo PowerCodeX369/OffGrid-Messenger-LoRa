@@ -14,7 +14,7 @@ data class RadioLink(
 ) {
     val hasPeer: Boolean get() = peer != "BROADCAST" && peer != "NONE"
     val signalLabel: String get() = when {
-        normalPeerAgeMs != null && (normalPeerAgeMs < 0 || normalPeerAgeMs > 12_000) -> "Peer not heard"
+        normalPeerAgeMs != null && (normalPeerAgeMs < 0 || normalPeerAgeMs >= 30_000) -> "LoRa peer silent"
         else -> rssiDbm?.let { "$it dBm" } ?: "No peer signal"
     }
     val phyLabel: String get() = when (if(rateMode=="AUTO")activeProfile else rateMode) {
@@ -52,7 +52,11 @@ data class RadioLink(
                 if (i <= 0 || i == field.lastIndex) null else field.substring(0, i) to field.substring(i + 1)
             }.toMap()
             val peer = fields[1]
-            val dbm = values["RSSI"]?.toIntOrNull()?.takeIf { peer != "BROADCAST" && peer != "NONE" && it in -160..-1 }
+            val age = (values["PEER_AGE_MS"] ?: values["REGAGE"])?.toLongOrNull()
+            val fresh = (values["RFHEARD"] ?: values["RFOK"]) != "0" && (age == null || age in 0..29_999)
+            val dbm = values["RSSI"]?.toIntOrNull()?.takeIf {
+                fresh && peer != "BROADCAST" && peer != "NONE" && it in -160..-1
+            }
             // The LoRa firmware sends PROFILE=LOW/BALANCED/MAX and AUTO=0/1.
             // Never interpret legacy ESP-NOW PHY=0.25/0.5 or MODE=LR250 as LoRa speeds.
             val mode = when {
@@ -64,7 +68,7 @@ data class RadioLink(
             }
             return RadioLink(peer, dbm, values["PHY"] ?: "", values["PHYMODE"] ?: "",
                 mode, values["PROFILE_CHANGES"]?.toLongOrNull() ?: values["CHANGES"]?.toLongOrNull(),
-                values["REGAGE"]?.toLongOrNull(),
+                age,
                 when(values["PROFILE"]){"LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";else->"UNKNOWN"})
         }
     }

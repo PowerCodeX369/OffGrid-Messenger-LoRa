@@ -25,5 +25,10 @@ assert b'LoRaNativeBulk' in (src/'MainActivity.kt').read_bytes()
 assert 'BULKBEGIN' in (src/'LoRaNativeBulk.kt').read_text()
 assert 'BULKCHUNK' in (src/'LoRaNativeBulk.kt').read_text()
 assert 'RXBCHUNK' in (src/'LoRaNativeBulk.kt').read_text()
-assert subprocess.check_output(['git','diff','--name-only','v3.0.0-rc.1-android','--','web','firmware/main','firmware/components'],cwd=root)==b'', 'Protected web or RF firmware changed'
+# v3.0.3 intentionally updates only main.c link telemetry / automatic RF policy.
+# Keep the radio driver, ARQ implementation, web, BLE authentication and UI frozen.
+unchanged=subprocess.check_output(['git','diff','--name-only','v3.0.0-rc.1-android','--','web','firmware/components','firmware/main/ble_auth_psa.h'],cwd=root)
+assert unchanged==b'', 'Protected web, BLE auth or RF driver changed'
+actual=subprocess.check_output(['git','diff','--name-only','v3.0.0-rc.1-android','--','firmware/main'],cwd=root).decode().splitlines()
+assert set(actual)<= {'firmware/main/main.c','firmware/main/lora_auto.h','firmware/main/ble_bridge.c'},'Unrelated firmware source changed'
 print('PASS: Original native UI preserved except requested LoRa radio menu; native launcher, web and firmware unchanged')

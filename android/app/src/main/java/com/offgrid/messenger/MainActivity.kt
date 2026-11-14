@@ -21,6 +21,7 @@ import android.os.Handler
 import android.os.Looper
 import android.content.pm.PackageManager
 import android.util.Log
+import android.widget.Toast
 import androidx.activity.ComponentActivity
 import androidx.activity.enableEdgeToEdge
 import androidx.core.content.ContextCompat
@@ -115,6 +116,8 @@ class MainActivity : ComponentActivity() {
     private var mediaHintSent = false
     private var manualAfterAuto: String? = null
     private var manualAutoTimer: Runnable? = null
+    private var requestedRadioMode: String? = null
+    private var requestedRadioTimer: Runnable? = null
     private var fastPhotos by mutableStateOf(true)
     private val bulk by lazy { LoRaNativeBulk(
         write={command -> link?.send(command)},
@@ -234,6 +237,7 @@ class MainActivity : ComponentActivity() {
                 power18Confirmed=false;powerApprovalRequest=null;waitingForPowerAck=null
                 powerAckTimer?.let(mainHandler::removeCallbacks);powerAckTimer=null
                 manualAfterAuto=null;manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
+                requestedRadioMode=null;requestedRadioTimer?.let(mainHandler::removeCallbacks);requestedRadioTimer=null
                 if(recording) {
                     recordAutoStop?.let(mainHandler::removeCallbacks);recordAutoStop=null
                     runCatching { voiceRecorder.finish(cancel=true) };recording=false
@@ -253,6 +257,7 @@ class MainActivity : ComponentActivity() {
         bulk.reset();mediaReceiver.clear();stopMediaTimer()
         powerAckTimer?.let(mainHandler::removeCallbacks)
         manualAutoTimer?.let(mainHandler::removeCallbacks)
+        requestedRadioTimer?.let(mainHandler::removeCallbacks)
         scheduledHistory?.let(mainHandler::removeCallbacks)
         val finalSnapshot=items.toList()
         historyWorker.execute { runCatching { history.save(finalSnapshot) } }
@@ -415,20 +420,43 @@ class MainActivity : ComponentActivity() {
         }
         powerAckTimer=timeout;mainHandler.postDelayed(timeout,8_000L)
     }
+    private fun emitRadioCommand(mode:String){
+        val command=RadioLink.command(mode)?:return
+        requestedRadioTimer?.let(mainHandler::removeCallbacks)
+        requestedRadioMode=mode
+        link?.send(command)
+        state="Requesting synchronized LoRa ${mode.lowercase()} mode…"
+        val timeout=Runnable {
+            if(requestedRadioMode==mode){
+                requestedRadioMode=null
+                state="No authenticated RF mode confirmation; check both nodes and their LoRa signal"
+                Toast.makeText(this, state, Toast.LENGTH_LONG).show()
+                link?.send("STATUS")
+            }
+        }
+        requestedRadioTimer=timeout
+        mainHandler.postDelayed(timeout,24_000L)
+    }
+    private fun clearRadioRequest(){
+        requestedRadioMode=null
+        requestedRadioTimer?.let(mainHandler::removeCallbacks)
+        requestedRadioTimer=null
+    }
     private fun applyRadioMode(mode:String){
         if(!connected)return
-        val command=RadioLink.command(mode)?:return
+        if(RadioLink.command(mode)==null)return
         if(mode!="AUTO" && radioLink?.rateMode=="AUTO"){
             // AUTO OFF is an authenticated two-node handshake; never send the
             // manual profile offer until that handshake has completed.
             manualAfterAuto=mode
             link?.send("AUTO OFF")
+            state="Disabling Auto on both radios before manual selection…"
             manualAutoTimer?.let(mainHandler::removeCallbacks)
             val timeout=Runnable {
                 if(manualAfterAuto==mode){manualAfterAuto=null;state="Auto OFF not confirmed; mode unchanged"}
             }
             manualAutoTimer=timeout;mainHandler.postDelayed(timeout,12_000L)
-        }else link?.send(command)
+        }else emitRadioCommand(mode)
         mainHandler.postDelayed({if(connected)link?.send("STATUS")},2_000L)
     }
     private fun chooseRadioMode(mode:String){
@@ -786,11 +814,31 @@ class MainActivity : ComponentActivity() {
                         if(event=="OFF" && manualAfterAuto!=null){
                             val target=manualAfterAuto!!;manualAfterAuto=null
                             manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
-                            link?.send(RadioLink.command(target)!!)
-                        }else if(event=="ERROR" && manualAfterAuto!=null){
+                            emitRadioCommand(target)
+                        }else if(event=="ERROR"){
                             manualAfterAuto=null
                             manualAutoTimer?.let(mainHandler::removeCallbacks);manualAutoTimer=null
-                            state="Cannot leave Auto mode: $line"
+                            clearRadioRequest()
+                            state="Auto RF rejected by ESP32: $line"
+                            Toast.makeText(this, state, Toast.LENGTH_LONG).show()
+                        }else if(event=="ON" && requestedRadioMode=="AUTO"){
+                            clearRadioRequest();state="Automatic LoRa adaptation synchronized on both radios"
+                        }else if(event=="OFF" && requestedRadioMode=="AUTO"){
+                            clearRadioRequest();state="Auto RF disabled; manually select Auto again"
+                        }
+                    }
+                    "PROFILE" -> {
+                        if(event=="ERROR" || event=="TIMEOUT" || event=="PEER_BUSY"){
+                            clearRadioRequest()
+                            state="LoRa profile change failed: $line"
+                            Toast.makeText(this, state, Toast.LENGTH_LONG).show()
+                        }else if(event=="ACTIVE"){
+                            val actual=when(split.getOrNull(2)){
+                                "LOW"->"FAST";"BALANCED"->"BALANCED";"MAX"->"RANGE";else->null
+                            }
+                            if(actual!=null && actual==requestedRadioMode){
+                                clearRadioRequest();state="Both radios synchronized: $actual"
+                            }
                         }
                     }
                     "MEDIA" -> {
