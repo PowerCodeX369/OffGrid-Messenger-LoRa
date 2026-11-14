@@ -1,3 +1,14 @@
+## Android native LoRa v3.0.1-rc.1 security boundaries (current)
+
+- The **original native Compose app** is the launcher again. There is **no WebView UI, web-to-native JavaScript bridge, or USB-OTG connection screen** in v3.0.1. The original BLE HMAC challenge/response, Android Keystore-wrapped 32-byte pairing key, and native encrypted history remain.
+- Application text, media segments, and receipts use LoRa browser-compatible **OGM4 AES-256-GCM** with authenticated transfer IDs. Each BLE bulk session requires fresh verified `CAPS|FAMILY=LORA|PROTO=2|BULK=1|MEDIA=1` after successful BLE authentication; the app fails closed on the old firmware's BLE media-disabled service.
+- The original radio firmware still supports BLE pairing, but the included **opt-in BLE bulk companion** must be flashed onto **both** nodes for current LoRa media. The BLE GATT authentication alone does not provide link-layer confidentiality for all metadata/control commands; device-level BLE pairing and traffic interception need real-hardware threat evaluation.
+- This native source has host interoperability simulations, **not** a verified Android APK, ESP-IDF target build, or physical BLE/radio security audit. Persistent authenticated RF control replay defense across MCU resets is still pending.
+
+**Historical section below:** the Android 3.0.0 WebView threat model applies only to the previous, superseded release; its WebView-specific claims do not describe the new native launcher.
+
+---
+
 ## Android 3.0.0-rc.1 source candidate: security boundaries
 
 - Local `WebViewAssetLoader` origin, origin-checked `WebViewCompat` native bridge, no Android `INTERNET` permission, and external WebView navigation blocked. This is a protection layer, **not** a substitute for Android on-device testing.

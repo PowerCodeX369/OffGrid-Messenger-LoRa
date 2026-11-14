@@ -1,3 +1,11 @@
+## v3.0.1-rc.1 — Native Android UI restoration and LoRa BLE protocol port
+
+- Restore original Android `MainActivity` launcher; remove v3.0.0 alternate WebView, bundled HTML/JS/CSS and USB OTG screen. Original `PremiumUi.kt` and BLE GATT/Keystore code stay byte-identical.
+- Replace ESP-NOW-style per-fragment `MSGHEX` sending under the original native UI with LoRa AES-GCM OGM4 bulk transfers, authenticated receipts and web-compatible 48/40 KiB multipart media.
+- Preserve the prior opt-in LoRa NimBLE bulk companion firmware unchanged. Require authenticated LoRa bulk capability negotiation on Android before enabling send; no false compatibility with old rc.4 BLE firmware.
+- Keep manual/Auto modes mapped behind the existing native radio controls, with original RF code untouched.
+- Add native Kotlin end-to-end crypto/media/bulk tests and checks that the web, SX1278 firmware and Android Compose visuals were not changed. No target APK or phone test claimed.
+
 ## Android universal app 3.0.0-rc.1 (source candidate; pending Android SDK and two-radio verification)
 
 - New Android launcher uses the unchanged v1.10 web HTML/CSS/JS (plus origin-scoped Web Serial bridge), keeping exact text/photo/voice/receipt/media-queue/RF UI parity.
