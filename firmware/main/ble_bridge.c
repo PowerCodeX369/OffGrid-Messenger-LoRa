@@ -90,7 +90,7 @@ static void complete_line(char *line){
   push("BINCAP|0|0",true);return;
  }
  if(!strcmp(line,"CAPS?")){
-  push("CAPS|FAMILY=LORA|PROTO=2|RADIO=SX1278|TEXT=1|MEDIA=1|PROFILES=3|BULK=1|AUTORF=1|RF_POLICY=ULTRA12|ULTRA=SF12_TEXT_ONLY",true);return;
+  push("CAPS|FAMILY=LORA|PROTO=2|RADIO=SX1278|TEXT=1|MEDIA=1|PROFILES=4|BULK=1|AUTORF=1|RF_POLICY=ULTRA12_FEC8|ULTRA=SF12_TEXT_ONLY",true);return;
  }
  if(!offgrid_ble_allows_command(line)){push("ERROR|BLE_DENIED",false);return;}
  offgrid_ble_command_t item={0};

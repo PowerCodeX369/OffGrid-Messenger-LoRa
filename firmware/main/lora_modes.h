@@ -51,9 +51,11 @@ static inline offgrid_sx1278_profile_t og_mode_profile(uint8_t mode) {
         p.tx_power_dbm=18; /* Ra-02 module-rated nominal; opt-in PA_DAC. */
         p.high_pa_dac=true;
     }else if(mode==OG_MODE_ULTRA){
-        /* SF12/BW125, CR4/5, explicit header, CRC, low data rate optimize. */
+        /* Ultra-only stronger CR4/8 FEC. Both nodes run the same signed
+         * profile; SF9 Range remains byte-identical to the old settings. */
         p.bandwidth=OFFGRID_SX1278_BW_125_KHZ;
         p.spreading_factor=12;
+        p.coding_denominator=8;
         p.tx_power_dbm=18;
         p.high_pa_dac=true;
     }

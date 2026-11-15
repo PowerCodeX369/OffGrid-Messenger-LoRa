@@ -39,7 +39,7 @@ uint32_t og_ultra_airtime_ms(uint8_t sf,uint32_t bw,uint8_t cr,
 
 uint32_t og_ultra_ack_wait_ms(uint16_t ack_air_bytes,uint8_t attempt){
     /* Mandatory SF12/BW125 low data rate optimization is included in airtime. */
-    const uint32_t ack_air=og_ultra_airtime_ms(12,125000,5,8,ack_air_bytes);
+    const uint32_t ack_air=og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,ack_air_bytes);
     if(!ack_air)return 0u;
     if(attempt>5u)attempt=5u;
     /* Starts AFTER TxDone, so do not add original DATA airtime twice. */
@@ -48,7 +48,7 @@ uint32_t og_ultra_ack_wait_ms(uint16_t ack_air_bytes,uint8_t attempt){
 
 uint32_t og_ultra_fragment_deadline_ms(uint16_t payload_air_bytes,
                                       uint16_t ack_air_bytes,uint8_t attempt){
-    uint32_t tx=og_ultra_airtime_ms(12,125000,5,8,payload_air_bytes);
+    uint32_t tx=og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,payload_air_bytes);
     uint32_t ack=og_ultra_ack_wait_ms(ack_air_bytes,attempt);
     if(!tx||!ack||tx>UINT32_MAX-ack)return 0u;
     return tx+ack;

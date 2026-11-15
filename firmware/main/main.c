@@ -150,7 +150,7 @@ static int64_t arq_last_tx_ms;
 static bool high_pa_verified;
 static bool peer_arq_seen;
 static int64_t peer_arq_at_ms,last_arq_caps_ms;
-static bool peer_ultra_capable; /* Learned only from authenticated ARQ_CAPS=2. */
+static bool peer_ultra_capable; /* Only authenticated ARQ_CAPS=3 matches Ultra CR4/8. */
 
 /* A profile change is explicitly user-initiated. Both radios exchange HMAC-
  * authenticated OGM2 control frames on the OLD profile before either switches.
@@ -318,7 +318,7 @@ static bool arq_send_radio(void *ctx,const uint8_t *wire,size_t n){
     (void)ctx;
     if(!radio_key_ready||!sx||n>OFFGRID_SX1278_MAX_PAYLOAD)return false;
     const uint32_t limit=profile_state.current==OG_MODE_ULTRA ?
-        og_ultra_airtime_ms(12,125000,5,8,(uint16_t)n)+1500u :
+        og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,(uint16_t)n)+1500u :
         OG_RADIO_TX_TIMEOUT_MS;
     const esp_err_t e=offgrid_sx1278_send(sx,wire,n,limit);
     if(e==ESP_OK){stat_tx++;arq_tx_done++;return true;}
@@ -434,7 +434,7 @@ static esp_err_t tx(const og_frame_t *f) {
     if(!radio_hmac(bytes,n,digest))return ESP_FAIL;
     memcpy(bytes+n,digest,OG_AUTH_BYTES);memset(digest,0,sizeof(digest));
     const uint32_t limit=profile_state.current==OG_MODE_ULTRA ?
-        og_ultra_airtime_ms(12,125000,5,8,(uint16_t)(n+OG_AUTH_BYTES))+1500u :
+        og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,(uint16_t)(n+OG_AUTH_BYTES))+1500u :
         OG_RADIO_TX_TIMEOUT_MS;
     esp_err_t e=offgrid_sx1278_send(sx,bytes,n+OG_AUTH_BYTES,limit);
     if(e==ESP_OK)stat_tx++;
@@ -467,7 +467,7 @@ static void profile_start_offer(uint8_t target, bool force, bool automatic, bool
     }
     if(profile_state.phase!=OG_PROFILE_IDLE){output("PROFILE|ERROR|TRANSITION_IN_PROGRESS\n");return;}
     if(target==OG_MODE_ULTRA && !peer_ultra_capable){
-        output("PROFILE|ERROR|PEER_REQUIRES_V304_ULTRA\n");return;
+        output("PROFILE|ERROR|PEER_REQUIRES_V305_ULTRA_FEC8\n");return;
     }
     if(target==profile_state.current){profile_report("ACTIVE");return;}
     if(profile_has_pending()&&!force){output("PROFILE|ERROR|PENDING_MESSAGES_USE_FORCE\n");return;}
@@ -686,7 +686,7 @@ static void auto_service(void){
                                       (uint32_t)now,false,lossy);
     if(chosen!=profile_state.current){
         if(chosen==OG_MODE_ULTRA && !peer_ultra_capable){
-            output("AUTO|SKIP|ULTRA_REQUIRES_BOTH_V304\n");return;
+            output("AUTO|SKIP|ULTRA_REQUIRES_BOTH_V305_FEC8\n");return;
         }
         auto_attempts++;
         output("AUTO|SELECT|%s|REASON=RSSI_SNR_LOSS\n",og_mode_name(chosen));
@@ -727,7 +727,7 @@ static void media_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -739,13 +739,13 @@ static void show_link(void) {
            "|FAIL=%" PRIu32 "|TXOK=%" PRIu32 "|TXFAIL=%" PRIu32 "|RX=%" PRIu32
            "|HELLO=%" PRIu32 "|CHANGES=0|SNR_Q4=%d|RADIOACK=%" PRIu32
            "|BADTAG=%" PRIu32 "|CRC=%" PRIu32 "|TXDONE=%" PRIu32
-           "|APPACK=%" PRIu32 "|ARQ_TX=%" PRIu32 "|ARQ_ACKTX=%" PRIu32 "|ARQ_ACKRX=%" PRIu32 "|ARQ_RETX=%" PRIu32 "|ARQ_TIMEOUT=%" PRIu32 "|ARQ_BADMAC=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PEER_ARQ=%u|PROFILE=%s|PROFILE_PHASE=%d|PROFILE_CHANGES=%" PRIu32 "|PROFILE_ROLLBACKS=%" PRIu32 "|AUTO=%u|AUTO_PEER=%u|AUTO_ATTEMPTS=%" PRIu32 "|AUTO_FAILURES=%" PRIu32 "\n",
+           "|APPACK=%" PRIu32 "|ARQ_TX=%" PRIu32 "|ARQ_ACKTX=%" PRIu32 "|ARQ_ACKRX=%" PRIu32 "|ARQ_RETX=%" PRIu32 "|ARQ_TIMEOUT=%" PRIu32 "|ARQ_BADMAC=%" PRIu32 "|ARQ_RXDUP=%" PRIu32 "|ARQ_USBERR=%" PRIu32 "|CAD_BUSY=%" PRIu32 "|PENDING=%u|CTRLQ=%u|PEER_ARQ=%u|PROFILE=%s|PROFILE_PHASE=%d|PROFILE_CHANGES=%" PRIu32 "|PROFILE_ROLLBACKS=%" PRIu32 "|AUTO=%u|AUTO_PEER=%u|AUTO_ATTEMPTS=%" PRIu32 "|AUTO_FAILURES=%" PRIu32 "\n",
            p,(int)peer_rssi,age_ms,(unsigned)(peer_seen && age_ms>=0 && age_ms<OG_PEER_STALE_MS),
            stat_delivered,stat_retry,stat_fail,stat_tx,stat_tx_errors,
            stat_rx,stat_hello,(int)auto_policy.local.snr_q4,stat_radio_ack,stat_badtag,stat_crc,
            stat_tx_done,stat_appack,arq.tx_frames,arq.bitmap_acks_tx,
            arq.bitmap_acks_rx,arq.retransmits,arq.ack_timeouts,
-           arq.reject_auth,stat_busy_cad,
+           arq.reject_auth,arq.rx_duplicates,arq.usb_errors,stat_busy_cad,
            pending_count,ctrl_count,(unsigned)peer_arq_seen,
            og_mode_name(profile_state.current),
            (int)profile_state.phase,stat_profile_changes,stat_profile_rollbacks,
@@ -884,9 +884,9 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         return;
     }
     if(f.type==OG_TYPE_ARQ_CAPS){
-        if(f.length==1 && (f.data[0]==1 || f.data[0]==2)){
+        if(f.length==1 && (f.data[0]>=1 && f.data[0]<=3)){
             peer_arq_seen=true;peer_arq_at_ms=millis();
-            peer_ultra_capable=f.data[0]>=2;
+            peer_ultra_capable=f.data[0]>=3;
         }
         return;
     }
@@ -1338,7 +1338,7 @@ static void radio_loop(void *arg) {
                                      peer_arq_seen?15000:1100)){
             last_arq_caps_ms=now;
             og_frame_t cap=new_frame(OG_TYPE_ARQ_CAPS,boot_session,0);
-            cap.length=1;cap.data[0]=2; /* Ultra-capable v3.0.4 peer */
+            cap.length=1;cap.data[0]=3; /* v3.0.5 Ultra CR4/8 peer */
             (void)control_add(&cap,25+(esp_random()%30));
         }
         if(now-last_link_ms>=OG_STATUS_MS){last_link_ms=now;show_link();}
@@ -1352,7 +1352,8 @@ static void radio_loop(void *arg) {
                                profile_state.current==OG_MODE_MAX?1950u:
                                profile_state.current==OG_MODE_BALANCED?480u:200u;
         const uint32_t ack_timeout=profile_state.current==OG_MODE_ULTRA?
-            og_ultra_ack_wait_ms(OG_SR_HEADER+OG_SR_ACK_BYTES+OG_SR_TAG,2):
+            og_ultra_ack_wait_ms(OG_SR_HEADER+OG_SR_ACK_BYTES+OG_SR_TAG,
+                 og_sr_tx_largest_attempt(&arq.tx)) :
                                    profile_state.current==OG_MODE_MAX?2250u:
                                    profile_state.current==OG_MODE_BALANCED?750u:420u;
         bool legacy_busy=false;

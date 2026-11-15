@@ -13,13 +13,13 @@
 #define OG_ULTRA_MODE 4u
 #define OG_ULTRA_SF 12u
 #define OG_ULTRA_BW_HZ 125000u
-#define OG_ULTRA_CR_DENOM 5u /* 4/5: fast end of standard LoRa CR options */
+#define OG_ULTRA_CR_DENOM 8u /* CR4/8: stronger FEC for intermittent/weak Ultra RF */
 #define OG_ULTRA_PREAMBLE 8u
 #define OG_ULTRA_LOW_DATA_RATE_OPTIMIZE true
-/* For explicit header + CRC + AGC: register 0x1D=0x72 (BW125, 4/5),
+/* For explicit header + CRC + AGC: register 0x1D=0x78 (BW125, 4/8),
  * 0x1E=0xC4 (SF12, CRC), 0x26=0x0C (AGC, LDRO).
  * Do not change the existing driver or transmitter power path blindly. */
-#define OG_ULTRA_MODEM_CONFIG1 0x72u
+#define OG_ULTRA_MODEM_CONFIG1 0x78u
 #define OG_ULTRA_MODEM_CONFIG2 0xC4u
 #define OG_ULTRA_MODEM_CONFIG3 0x0Cu
 #define OG_ULTRA_DOWN_RSSI_DBM (-115)

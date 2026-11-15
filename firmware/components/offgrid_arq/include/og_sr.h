@@ -24,6 +24,7 @@ extern "C" {
 #define OG_SR_MAX_TRANSFER (OG_SR_MAX_FRAGMENTS * OG_SR_PAYLOAD)
 #define OG_SR_MAX_WINDOW 6u
 #define OG_SR_MAX_ATTEMPTS 5u
+#define OG_SR_ULTRA_MAX_ATTEMPTS 12u /* persistent sender requeues after failure */
 #define OG_SR_FLAG_END_BURST 1u
 #define OG_SR_FLAG_ULTRA 2u
 #define OG_SR_FLAG_SIZE_MASK 12u
@@ -96,6 +97,8 @@ void og_sr_tx_done(og_sr_tx_t *tx,const og_sr_frame_t *frame,bool tx_done,
                    uint32_t at_ms,uint32_t ack_timeout_ms);
 /* Only call after a MAC-verified ACK from the expected peer. */
 bool og_sr_tx_ack(og_sr_tx_t *tx,const og_sr_frame_t *ack);
+/* Number of the highest retry attempt in flight, for profile-aware ACK RTO. */
+uint8_t og_sr_tx_largest_attempt(const og_sr_tx_t *tx);
 /* Expired ACK time allows retransmission of *unacknowledged* fragments only.
  * Caller owns the airtime, contention policy, and timebase. */
 void og_sr_tx_tick(og_sr_tx_t *tx,uint32_t now_ms);

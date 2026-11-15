@@ -100,7 +100,8 @@ bool og_sr_tx_pick(og_sr_tx_t *t,og_sr_frame_t *f) {
     if(which==exclusive){t->phase=OG_SR_WAIT_ACK;return false;}
     /* Ultra-only: extend selective ARQ retries without changing the proven
      * five-attempt Fast/Balanced/SF9 behavior. Retries never invent an ACK. */
-    const unsigned limit=t->fragment_payload==OG_SR_PAYLOAD ? OG_SR_MAX_ATTEMPTS : 8u;
+    const unsigned limit=t->fragment_payload==OG_SR_PAYLOAD ?
+        OG_SR_MAX_ATTEMPTS : OG_SR_ULTRA_MAX_ATTEMPTS;
     if(t->attempts[which]>=limit){t->phase=OG_SR_FAILED;return false;}
     memset(f,0,sizeof(*f));
     f->type=OG_SR_DATA;f->session=t->session;f->transfer=t->transfer;
@@ -217,4 +218,13 @@ bool og_sr_rx_make_ack(og_sr_rx_t *r,og_sr_frame_t *ack) {
     ack->length=OG_SR_ACK_BYTES;ack->bitmap=r->received;
     r->ack_pending=false;
     return true;
+}
+
+uint8_t og_sr_tx_largest_attempt(const og_sr_tx_t *tx){
+    if(!tx)return 0;
+    uint8_t n=0;
+    for(unsigned i=0;i<tx->fragments && i<OG_SR_MAX_FRAGMENTS;i++)
+        if(!(tx->acknowledged&(UINT32_C(1)<<i)) && tx->attempts[i]>n)
+            n=tx->attempts[i];
+    return n;
 }
