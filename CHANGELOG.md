@@ -1,3 +1,10 @@
+## v3.0.5-rc.3 — ARQ capability-3 interoperability repair (2026-11-15)
+
+- **Root cause established from two real node logs:** both firmware images sent authenticated `ARQ_CAPS=3`, but `og_wire_valid()` rejected all cap-3 control frames (accepted only 1 and 2). Consequently `PEER_ARQ=0` on both and every encrypted text failed `PEER_REQUIRES_V16_ARQ` before RF ARQ transmission.
+- Allow authenticated ARQ capability values 1, 2, 3; continue rejecting out-of-range values and malformed lengths. Add explicit C wire-format tests. No change to ARQ packet format, crypto, UI, media codec, RF profiles, NVS or radio driver.
+- Both radios must be rebuilt/flashed from this corrected firmware. RC2 browser diagnostics remain compatible and are useful for checking `PEER_ARQ=1`, `ARQ_TX>0`, and `BULKCONFIRMED`.
+- Full host suite passes; ESP-IDF target build and hardware transmission require user validation. [Details](docs/V3_0_5_RC3_ARQ_CAPS_FIX.md).
+
 ## v3.0.5-rc.1 — Final weak-link delivery stabilization candidate (2026-11-15)
 
 - **Encrypted persistent text outbox:** Android native encrypted history + Web IndexedDB now retain undelivered outgoing text as `waiting`; active, authenticated clients retry only after fresh LoRa peer traffic. 15–300-second exponential backoff and per-message 0–5-second pseudorandom jitter; no fake delivery receipts. Restore prior failed/in-flight texts as waiting rather than silently discarding them. No cloud service, no unencrypted message spool.
