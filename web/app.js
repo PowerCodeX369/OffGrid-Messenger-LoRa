@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.10.0-rc2-final-weaklink';
+const APP_VERSION='1.10.0-rc3-close-range-diagnostics';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -24,8 +24,25 @@ let mediaResponseWaiter=null;
 let pendingNodeGet=null,pendingNodeSet=null;
 /* USB diagnostics: distinguish missing console output from incompatible or old firmware. */
 const usbLog=[];
+let keyFingerprint=null; // 48-bit SHA-256 display only; NEVER store or log the key
 let usbWaitTimer=null,usbHandshakeStarted=0,usbLastRawAt=0,usbHandshakeIssue='',usbSawBeacon=false;
-function logUsb(line){usbLog.push(`[${new Date().toLocaleTimeString()}] ${String(line).slice(0,240)}`);if(usbLog.length>75)usbLog.shift();}
+function logUsb(line){usbLog.push(`[${new Date().toLocaleTimeString()}] ${String(line).slice(0,450)}`);if(usbLog.length>240)usbLog.shift();}
+/* Preserve RF counters at the END of the long LINK record. Previously the
+ * first 240 characters hid PEER_ARQ, CRC, ACK, and USB errors, precisely the
+ * fields needed to investigate one-way reception. Never log KEYDATA. */
+function compactLinkDiagnostic(line){
+ const fields={};const bits=line.split('|');
+ for(const token of bits.slice(2)){const i=token.indexOf('=');if(i>0)fields[token.slice(0,i)]=token.slice(i+1);}
+ const names=['RSSI','PEER_AGE_MS','RFHEARD','PROFILE','AUTO','PEER_ARQ',
+  'TXOK','TXFAIL','RX','ARQ_TX','ARQ_ACKTX','ARQ_ACKRX',
+  'ARQ_RETX','ARQ_TIMEOUT','ARQ_BADMAC','ARQ_USBERR','CRC','BADTAG'];
+ return 'LINK|'+(bits[1]||'NONE')+'|'+names.map(k=>k+'='+(fields[k]??'?')).join('|');
+}
+async function radioKeyFingerprint(raw){
+ if(!(raw instanceof Uint8Array)||raw.length!==32)return null;
+ const digest=new Uint8Array(await crypto.subtle.digest('SHA-256',raw));
+ return Array.from(digest.slice(0,6),b=>b.toString(16).padStart(2,'0')).join('').toUpperCase();
+}
 function showUsbHint(message){usbHandshakeIssue=message;const area=$('usbDiagnostics');if(!area)return;area.classList.remove('hidden');$('usbDiagnosticsText').textContent=message;}
 function clearUsbHint(){usbHandshakeIssue='';$('usbDiagnostics')?.classList.add('hidden');}
 function updateUsbWait(){
@@ -39,6 +56,7 @@ function updateUsbWait(){
 function diagnoseUsb(){
  showDialog('USB diagnostics',body=>{
   body.append(el('p','',`State: ${verified?'connected':port?'waiting for READY':'disconnected'}. ${usbHandshakeIssue||'No active USB error.'}`));
+  body.append(el('p','',`Pairing key fingerprint (SHA-256 prefix): ${keyFingerprint||'not loaded'} — compare with the OTHER ESP32. Different fingerprints mean encryption and radio HMAC cannot work, even if both browsers show Connected.`));
   const log=el('div','usb-diagnostics-log',usbLog.join('\n')||'No serial output captured.');body.append(log);
   const controls=el('div','modal-actions');
   const copy=el('button','quiet-button','Copy diagnostics');copy.onclick=()=>navigator.clipboard?.writeText(usbLog.join('\n')+'\n'+usbHandshakeIssue).then(()=>toast('Copied USB diagnostic log')).catch(()=>toast('Clipboard unavailable'));
@@ -567,7 +585,11 @@ async function setState(r,status,error=''){
   const t=receiptWatchdogs.get(r.id);
   if(t){clearTimeout(t);receiptWatchdogs.delete(r.id);}
  }
- const prior=r.status||'sending';if(prior==='read'&&status!=='read')return;if(prior==='delivered'&&status==='failed')return;
+ const prior=r.status||'sending';
+ // An old failed retry, disconnect callback or watchdog must NEVER undo
+ // a genuine authenticated delivered/read receipt.
+ if(prior==='read'&&status!=='read')return;
+ if(prior==='delivered'&&!['delivered','read'].includes(status))return;
  if(status!=='failed'&&status!=='waiting'&&(stateRank[status]??0)<(stateRank[prior]??0))return;
  r.status=status;r.error=error;r.progress=status==='sending'?r.progress:0;updateBubble(r);
  if(r.dir==='out'&&r.kind==='text'&&r.textClickedAt&&prior!==status&&
@@ -1167,6 +1189,10 @@ async function transferFragments(packet,job){
  job.bulkMetrics=await rfScheduler.submit(job.control?'receipt':'data',()=>bulkLink.send(
     packet.transferId,packet.ciphertext,Boolean(job.control),{
       media:Boolean(job.mediaSegment),
+      onStage:stage=>{
+        // Stage names and sizes only. Never include encryption keys or text.
+        if(!job.mediaSegment)logUsb(`BULK_STAGE|${job.kind}|${stage}|SIZE=${packet.ciphertext.length}`);
+      },
       onSent:()=>{
         if(job.record&&!job.mediaSegment)void setState(job.record,'sent');
       },
@@ -1194,6 +1220,14 @@ async function sendTextJob(job){
  const r=job.record;
  const started=performance.now();
  const queuedMs=Math.max(0,started-(job.createdMono||started));
+ const stalled=setTimeout(()=>{
+    // One bounded STATUS query permits distinguishing missing CAPS/RF ACK
+    // from a stalled USB bulk stage without flooding the event queue.
+    if(verified&&writer){
+     logUsb('TEXT_STALL|NO_RF_CONFIRMATION_AFTER_10S|CHECK_BULK_STAGE_AND_BOTH_LINK_COUNTERS');
+     void writeLine('STATUS').catch(()=>{});
+    }
+ },10000);
  try{
   const packet=await sealJob(job);
   await transferFragments(packet,job);
@@ -1205,8 +1239,9 @@ async function sendTextJob(job){
  }catch(e){
   weakTextRetry.postpone(r.id,Date.now());
   await setState(r,'waiting',e.message);
+  logUsb('TEXT_FAILURE|'+String(e.message).slice(0,160));
   toast('Text saved encrypted. Retrying when the LoRa peer is usable.');
- }
+ }finally{clearTimeout(stalled);}
 }
 async function sendOneQueuedTextBetweenMediaSegments(){
  if(!verified||!secretKey||!bulkLink||profileTransition)return;
@@ -1221,10 +1256,10 @@ async function runTransfers(){
  if(runningTransfers||!verified||!secretKey)return;runningTransfers=true;
  try{
   while(verified&&secretKey&&transferQueue.length){
-   // Priority to encrypted receipts/control and short text. Never interrupt
-   // an already-transmitting RF fragment: take priority at job boundaries.
-   const urgentIndex=transferQueue.findIndex(j=>j.control || j.kind==='text');
-   const job=urgentIndex>=0?transferQueue.splice(urgentIndex,1)[0]:transferQueue.shift();
+   // Restore the v3.0.4 proven FIFO dispatch on this hotfix branch.
+   // The v3.0.5 priority reshuffle is disabled while we isolate a close-
+   // range regression. Control receipts retain their separate urgent queue.
+   const job=transferQueue.shift();
    activeTransfer=job;
    try{
     if(job.kind==='text'&&!job.control){await sendTextJob(job);continue;}
@@ -1378,6 +1413,7 @@ function parseLine(raw){const s=raw.trim();if(!s)return;
  // Record serial input for diagnosis, without exposing the 256-bit pairing key.
  usbLastRawAt=performance.now();
  if(s.startsWith('KEYDATA|'))logUsb('ESP32> KEYDATA|<redacted>');
+ else if(s.startsWith('LINK|'))logUsb('ESP32> '+compactLinkDiagnostic(s));
  else logUsb('ESP32> '+s);
  if(s.startsWith('READY|'))usbSawBeacon=true;
  if(s.startsWith('FATAL|')){showUsbHint('ESP32 startup error: '+s.slice(6));return;}
@@ -1438,6 +1474,8 @@ async function onReady(mac){
    try{setName(localStorage.getItem(nameKey())||localStorage.getItem('offgrid_phase13_name_'+macKey().replace(/:/g,'-'))||'Nearby node');}catch{setName('Nearby node');}
    const raw=await getNodeKey();
    if(raw){
+     try{keyFingerprint=await radioKeyFingerprint(raw);logUsb('PAIRING_KEY_FP|SHA256_48='+keyFingerprint);}
+     catch(e){keyFingerprint=null;logUsb('PAIRING_KEY_FP|UNAVAILABLE');}
      await adoptNodeKey(raw);
      void updateContactAvatar();
      for(const r of records){
@@ -1447,7 +1485,7 @@ async function onReady(mac){
      }
      sendReadReceipts();startWeakRetry();
    }else{
-     secretKey=null;records=[];recordMap.clear();renderHistory();
+     keyFingerprint=null;secretKey=null;records=[];recordMap.clear();renderHistory();
      refreshStatus();showPairing();
    }
    refreshStatus();
@@ -1477,7 +1515,7 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
  finally{
   if(mediaResponseWaiter)mediaResponseWaiter.finish(null,Error('Disconnected'));
   finishNodeKeyRequest('get',null,Error('Disconnected'));finishNodeKeyRequest('set',null,Error('Disconnected'));
-  clearWeakRetry();
+  clearWeakRetry();keyFingerprint=null;
  readPromise=null;serialBuffer='';verified=false;port=null;writer=null;clearUsbHint();if(pendingRadio())failPendingRadio(Error('Disconnected'));if(activeTransfer?.record){const r=activeTransfer.record;
      void setState(r,r.kind==='text'?'waiting':'failed','Disconnected');}
  // Persist unsent text. Never silently discard it with an in-memory queue.

@@ -23,13 +23,13 @@
    if(this.active){const a=this.active;this.active=null;if(a.waiter){a.waiter.reject(Error(reason));a.waiter=null;}a.rejectFinal(Error(reason));}
    this.rx=null;
   }
-  async send(id,ciphertext,priority,{onSent=()=>{},onProgress=()=>{},media=false}={}){
+  async send(id,ciphertext,priority,{onSent=()=>{},onProgress=()=>{},onStage=()=>{},media=false}={}){
    id=String(id).toUpperCase();
    if(this.closed||this.active)throw Error('LoRa bulk connection busy or disconnected');
    if(!HEX.test(id)||id.slice(0,8)==='00000000'||id.slice(8)==='00000000'||
       !(ciphertext instanceof Uint8Array)||ciphertext.length<28||ciphertext.length>MAX)
     throw Error('Invalid encrypted LoRa bulk transfer');
-   const a={id,priority,media:!!media,waiter:null,onSent,onProgress,sent:false,done:false,resolveFinal:null,rejectFinal:null,started:performance.now(),stagedAt:0,radioStats:null};
+   const a={id,priority,media:!!media,waiter:null,onSent,onProgress,onStage,sent:false,done:false,resolveFinal:null,rejectFinal:null,started:performance.now(),stagedAt:0,radioStats:null};
    const final=new Promise((resolve,reject)=>{a.resolveFinal=resolve;a.rejectFinal=reject;});
    /* A rejected terminal promise can arrive while stage writes are pending.
     * Attach a handler immediately so browsers do not report unhandled rejects. */
@@ -37,7 +37,7 @@
    this.active=a;
    const sendStage=async(line,kind,seq)=>{
     const expected=waitResult(a,(parts)=>parts[0]===kind&&(kind!=='BULKSTEP'||Number(parts[2])===seq));
-    try{await this.write(line);await expected;}catch(e){
+    try{a.onStage(kind+'_SUBMITTED');await this.write(line);await expected;a.onStage(kind+'_ACKED');}catch(e){
      if(a.waiter){a.waiter.reject(e);a.waiter=null;}
      throw e;
     }
@@ -123,16 +123,17 @@
     }
     a.radioStats=stats;
    }else if(type==='BULKFAILED'){
+    a.onStage('BULKFAILED:'+parts.slice(2).join('_'));
     const err=Error('ESP32 bulk transfer unconfirmed: '+parts.slice(2).join(' '));
     if(a.waiter){a.waiter.reject(err);a.waiter=null;}
     a.rejectFinal(err);
    }else if(type==='BULKSENT'){
-    if(!a.sent){a.sent=true;a.onSent();}
+    if(!a.sent){a.sent=true;a.onStage('BULKSENT');a.onSent();}
    }else if(type==='BULKPROGRESS'){
     const n=Number(parts[2]),total=Number(parts[3]);
     if(Number.isInteger(n)&&Number.isInteger(total)&&total>0)a.onProgress(n,total);
    }else if(type==='BULKCONFIRMED'){
-    a.done=true;a.resolveFinal();
+    a.done=true;a.onStage('BULKCONFIRMED');a.resolveFinal();
    }else if(a.waiter){
     const w=a.waiter;
     if(w.predicate(parts)){a.waiter=null;w.resolve(parts);}
