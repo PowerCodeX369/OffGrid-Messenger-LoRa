@@ -18,7 +18,10 @@ assert 'weakTextRetry.holdForReceipt' in w and 'pumpWeakText' in w
 assert 'hydrateHistory' in w and "d.kind==='text'?'waiting':'failed'" in w
 assert 'weak_text_queue.js' in f('web/index.html')
 assert 'EVENT_QUEUE_FULL' in w and 'bounded retry' in w
-assert "const urgentIndex=transferQueue.findIndex(j=>j.control || j.kind==='text')" in w
+# Recovery build isolates the v3.0.5 queue reshuffle by restoring
+# the proven v3.0.4 FIFO job dispatch. Urgent receipts retain their own path.
+assert "const job=transferQueue.shift();" in w
+assert "const urgentIndex=transferQueue.findIndex" not in w
 assert 'RFHEARD' in w and "rssi>=-160" in w
 for p in ('firmware/components/offgrid_sx1278/offgrid_sx1278.c',
           'firmware/main/ble_auth_psa.h', 'web/protocol.js',
