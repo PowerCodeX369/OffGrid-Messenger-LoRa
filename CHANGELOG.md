@@ -227,3 +227,11 @@ First independent OffGrid Messenger **LoRa-only** source release.
 - Host regression checks, CI workflow, docs, wiring, hardware acceptance plan, provenance and license.
 
 **Release limitation:** physical ESP-IDF 6.1 compilation and integrated two-node verification pending; no validated latency or delivery-rate claims are made.
+
+## v3.0.5-rc.2 — Web-only near-range regression isolation (2026-11-15)
+
+- Source-level recovery candidate in response to reports that two close ESP32 nodes remain connected in v3.0.5 while outgoing text stays pending; v3.0.4 reportedly delivered text on the same hardware.
+- Restore v3.0.4 FIFO transfer ordering as a controlled A/B test; retain encrypted deferred text, integrity, existing firmware and Android without modification.
+- Fix monotonic authenticated delivery/read receipt state and add precise USB bulk stage, full ARQ `LINK` counters, and privacy-safe local pairing key fingerprint diagnostics.
+- Provide a pristine v3.0.4 browser comparator to test against the same v3.0.5 firmware in manual Balanced (not SF12 Ultra). No firmware or NVS erase required.
+- Host tests pass; hardware root cause not yet proven. See `docs/V3_0_5_RC2_WEB_CLOSE_RANGE_REGRESSION.md`.
