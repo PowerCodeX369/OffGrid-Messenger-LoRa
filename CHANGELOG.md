@@ -1,3 +1,11 @@
+## v3.0.5-rc.4 — SF12 verification collision avoidance and browser duplicate-send guard (2026-11-15)
+
+- Stagger authenticated SF12 verification HELLOs by initiator/responder role. Prior implementation sent multiple-second CR4/8 HELLOs simultaneously after mode change; both could collide until rollback. Pure timing helper and airtime-based host tests protect the old Fast/Balanced/Range verification timing.
+- Synchronously guard web Send before asynchronous encrypted IndexedDB persistence; prevent a fast double-click/Enter from creating separate message IDs. Subsequent intentional same-text sends still work. Add received-application-ID diagnostics and rate-limit repeated weak-link waiting notifications.
+- Add `PROFILE_SYNC=ULTRA_SLOTS4` to READY without changing strict web-compatible firmware token or authenticated RF protocol.
+- **No** Android UI, AES/media codec, SX1278 mode register, radio ARQ, BLE/NVS or message encryption changes. Source tested; physical mode-change and close-range delivery still need user validation.
+- [Details and acceptance](docs/V3_0_5_RC4_ULTRA_SYNC_AND_DOUBLE_SEND.md).
+
 ## v3.0.5-rc.3 — ARQ capability-3 interoperability repair (2026-11-15)
 
 - **Root cause established from two real node logs:** both firmware images sent authenticated `ARQ_CAPS=3`, but `og_wire_valid()` rejected all cap-3 control frames (accepted only 1 and 2). Consequently `PEER_ARQ=0` on both and every encrypted text failed `PEER_REQUIRES_V16_ARQ` before RF ARQ transmission.
