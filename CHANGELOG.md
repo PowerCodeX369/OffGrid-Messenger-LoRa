@@ -1,3 +1,10 @@
+## v3.0.6-public.1 — GitHub publication preparation (2026-11-16)
+
+- Public source documentation and contributor onboarding: current root/firmware/Android/web guides, wiring, architecture, tag map, development/testing/troubleshooting, release limitations and GitHub publish checklist. Older top-level version-specific docs preserved under `docs/history/`.
+- Add contributor/security/support/code-of-conduct guidance, GitHub issue/PR templates, source documentation link checks, separate ESP-IDF and Android CI build jobs and editor defaults.
+- **No production firmware, Android Kotlin, browser JavaScript/HTML/CSS, encryption, radio protocol, NVS layout or historical Git commit/tag modified.** New annotated tag points at a normal documentation-only commit; the existing `v3.0.6` tag stays on `e840802`.
+- Host tests and source checks passed locally, but GitHub-run target builds, physical RF compliance and independent field/security qualification must still be confirmed. See `docs/GITHUB_RELEASE_NOTES.md`.
+
 ## v3.0.6-rc.3 — Exact RSSI bands and disconnected-peer Auto search (2026-11-15)
 
 - Replace Fast-first automatic policy with the explicit operator requested bands: Balanced for RSSI above −100 dBm; Max for −130 to −100 dBm inclusive; Ultra below −130 dBm. Promotion and downgrade both map directly to the band on the freshest authenticated LoRa RSSI observation. An unavailable packet is not interpreted as −131 dBm. Reject stale/unconsented samples; use the worse of both directions when the peer metric is recent.

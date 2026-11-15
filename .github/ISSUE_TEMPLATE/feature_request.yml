@@ -1,0 +1,29 @@
+name: Feature request
+description: Suggest a change with compatibility, RF and privacy implications
+labels: ['enhancement']
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem or use case
+      description: 'Describe the user need, not just a proposed implementation.'
+    validations:
+      required: true
+  - type: textarea
+    id: proposal
+    attributes:
+      label: Proposed behavior
+    validations:
+      required: true
+  - type: dropdown
+    id: scope
+    attributes:
+      label: Scope
+      options: ['Documentation', 'Firmware', 'Android', 'Web', 'Multi-component', 'Hardware / regulatory']
+    validations:
+      required: true
+  - type: textarea
+    id: risks
+    attributes:
+      label: Compatibility, safety, security and testing considerations
+      description: 'Will both devices require upgrade? Does it change RF airtime, encryption, storage, media or UI?'

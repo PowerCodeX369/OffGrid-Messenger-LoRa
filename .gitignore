@@ -1,7 +1,26 @@
+# ESP-IDF build output and local config
 firmware/build/
 firmware/sdkconfig
 firmware/sdkconfig.old
 firmware/managed_components/
+# Android/Gradle output and machine-specific state
+.gradle/
+**/.gradle/
+android/.idea/
+android/local.properties
+android/**/build/
+*.apk
+*.aab
+# Local signing secrets / NVS / keys (never commit private device material)
+*.jks
+*.keystore
+*.p12
+*.pfx
+*.pem
+*.key
+*.nvs
+*.nvs.bin
+# Local development / Python / IDE
 **/__pycache__/
 *.pyc
 .DS_Store

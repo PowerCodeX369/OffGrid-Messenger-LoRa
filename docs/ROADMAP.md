@@ -1,15 +1,14 @@
-# OffGrid LoRa roadmap (updated for Ultra v3.0.4-rc.1)
+# Maintenance roadmap — after v3.0.6 feature completion
 
-- **v1.6.1-rc.2 — user-confirmed stable baseline:** reliable text, 224-byte ARQ data chunks, batched authenticated ACKs, one-click synchronized Fast/Balanced/Range manual modes.
-- **v1.7.0-rc.1 — user-confirmed locally functional:** opt-in two-way RSSI/SNR automatic Fast-first transitions, with safe fallback/rollback and manual override. Longer range not yet field-tested.
-- **v1.8.0-rc.3 — user-confirmed working media:** encrypted photos ≤48 KiB, recorded Opus voice notes ≤40 KiB, matching ESP-NOW web UI, existing verified text receipts and ARQ.
-- **v1.8.0-rc.4 — verified user media Fast handover baseline:** temporary authenticated Fast mode during photo/voice transfers, then signed return to previous manual/Auto mode. Not yet hardware-tested; rc.3 remains fallback.
-- **v1.8.0-rc.5 — web-only media efficiency candidate:** 7,040-byte segments, 8-line USB upload batches, detailed per-photo timing; no new firmware flash.
-- **v1.8 hardware qualification (still needed):** real radio media testing, 1-minute sustained transfers, frame loss/duplicate injection, photo rendering, Opus microphone/playback, regulatory/power-supply acceptance checks, long-range RF quality thresholds and complete ESP-IDF build.
-- **v1.9 (deferred; not included in v1.10):** durable, reconnect-safe media checkpoints in encrypted IndexedDB, receiving progress and cancellation across reboot, measured bitrate/latency, optional higher-budget long voice notes if the user accepts the physics of clear audio.
-- **v1.10.0-rc.1 (current):** bounded browser-side in-flight duplicate prevention, GCM/replay/error fuzz testing and Chromium regressions. **Still outstanding for a stable v1.10:** persistent RF control anti-replay across board resets, key-rotation crash-safety, independent security review, full ESP-IDF builds and physical soak/range tests.
-- **Android native LoRa v3.0.1-rc.1 (source candidate; hardware qualification pending):** restore the original ESP-NOW Compose UI and BLE pairing screen exactly, remove v3.0.0 WebView launcher, and adapt native AES-GCM, LoRa bulk photo/voice, receipts, priority and manual/Auto controls under the old UI. Original web messenger untouched. Both radios require the included BLE-bulk companion firmware; target Android/ESP-IDF builds and physical BLE/media tests still outstanding. See `docs/ANDROID_NATIVE_LORA_ACCEPTANCE.md`.
-- **v3.0.4-rc.1 (CURRENT Ultra source candidate):** new **SF12/BW125 Ultra Long Range** in addition to unchanged SF9 Max Range. Text and encrypted receipts only in Ultra; photos and voice blocked by official clients and tagged radio commands. Signed two-node Ultra negotiation requires both boards' ARQ_CAPS=2, new 48–96 B Ultra fragments, SF12 TxDone/ACK timeouts, 8 ARQ attempts, auto weak-link transition and slower recovery. Full v3.0.3 source history retained. **Next:** Android Studio APK + ESP-IDF 6.1 target builds, two-radio physical text/receipt tests at close/weak signal, RF power/duty-cycle checks, media verification outside Ultra; see `docs/V3_0_4_ULTRA_LONG_RANGE.md`.
-- **v2.1 (last, AFTER Android):** battery/low-power modes, sleep/wake power measurements, regulatory duty-cycle handling and safe +18 dBm supply validation.
+The feature milestone is complete: native Android, browser, encrypted text/media/receipts, Fast/Balanced/Max/Ultra, authenticated profile negotiations, compact Max/Ultra acknowledgments and requested Auto RSSI bands are present in source. The maintainer reports Auto works on two radios and one urban Max range test reached approximately 200–250 meters. This is not a formal field qualification or range guarantee.
 
-Every milestone must pass host tests and a clean ESP-IDF build, followed by physical two-node acceptance, before being called a hardware-stable release. No real-world distance is inferred from RSSI alone.
+## Next focus: qualification, not feature expansion
+
+1. Reproducible ESP-IDF and Android CI target builds and signed upgrade process.
+2. Long-duration two-board Auto/lost-link field test with release-tagged diagnostics.
+3. Browser↔Android combinations, reconnect/duplicate/receipt/media tests.
+4. Persistent security replay controls, interrupted key rotation and BLE threat review.
+5. Jurisdiction-specific spectrum and airtime rules; enforce required limits before deployment.
+6. Formal release notes, issue triage, contributor onboarding and public source maintenance.
+
+**Deferred by owner request:** battery/low-power optimization. No multi-hop routing or hardware redesign is implied in this source-complete milestone. Historical phase-by-phase roadmap: [`history/ROADMAP_BEFORE_PUBLICATION.md`](history/ROADMAP_BEFORE_PUBLICATION.md).

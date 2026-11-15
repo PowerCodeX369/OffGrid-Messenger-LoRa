@@ -1,17 +1,44 @@
-name: LoRa host regression checks
+name: Host regression and repository checks
 on:
   push:
   pull_request:
+permissions:
+  contents: read
 jobs:
   host:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
       - uses: actions/setup-node@v4
         with:
           node-version: '22'
-      - name: Portable C frame/profile + web crypto + source boundaries
-        run: firmware/tests/run-host-tests.sh
-      - name: Git and manifest check
-        run: git diff --check && git fsck --no-reflogs
-# Intentionally not labeled a hardware or full ESP-IDF compile job.
+      - uses: actions/setup-java@v4
+        with:
+          distribution: temurin
+          java-version: '17'
+      - name: Install portable C compiler
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y build-essential
+      - name: Install pinned Kotlin command-line compiler (2.4.20)
+        run: |
+          curl --fail --location --retry 3 --silent --show-error \
+            https://github.com/JetBrains/kotlin/releases/download/v2.4.20/kotlin-compiler-2.4.20.zip \
+            -o "$RUNNER_TEMP/kotlin-compiler.zip"
+          echo "59e9ca74c7904ef2c122b12114937673ccce68de820a663f0ed66ccf8799e0b7  $RUNNER_TEMP/kotlin-compiler.zip" | sha256sum --check
+          unzip -q "$RUNNER_TEMP/kotlin-compiler.zip" -d "$RUNNER_TEMP/kotlin-cli"
+          echo "$RUNNER_TEMP/kotlin-cli/kotlinc/bin" >> "$GITHUB_PATH"
+      - name: Host C/JavaScript/browser source regression tests
+        run: bash firmware/tests/run-host-tests.sh
+      - name: Native Android radio host tests
+        run: bash android/tests/run_native_radio_tests.sh
+      - name: Documentation links and required onboarding files
+        run: python3 tests/test_public_docs.py
+      - name: Source-integrity manifest
+        run: sha256sum -c SOURCE_MANIFEST.sha256
+      - name: Git whitespace and object integrity
+        run: |
+          git diff --check
+          git fsck --no-reflogs

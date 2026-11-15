@@ -1,0 +1,49 @@
+name: Bug report
+description: Report reproducible bugs, including crashes, RF transitions and duplicates
+labels: ['bug']
+body:
+  - type: markdown
+    attributes:
+      value: 'Do not post pairing keys, KEYDATA, NVS dumps, private messages or exact personal locations. For security vulnerabilities use SECURITY.md instead.'
+  - type: input
+    id: version
+    attributes:
+      label: Git tag or commit
+      description: E.g. v3.0.6-public.1 / git rev-parse --short HEAD
+    validations:
+      required: true
+  - type: dropdown
+    id: component
+    attributes:
+      label: Affected area
+      options: ['ESP32 firmware/RF', 'Native Android/BLE', 'Web/USB', 'Media', 'Documentation/CI', 'Cross-component']
+    validations:
+      required: true
+  - type: textarea
+    id: reproduce
+    attributes:
+      label: Steps to reproduce
+      placeholder: 'Device A/B versions, exact steps and what was sent (without sensitive content)'
+    validations:
+      required: true
+  - type: textarea
+    id: expected
+    attributes:
+      label: Expected versus actual behavior
+    validations:
+      required: true
+  - type: textarea
+    id: evidence
+    attributes:
+      label: Sanitized logs / diagnostics
+      description: 'Include READY, LINK, PROFILE and ARQ counters if relevant; remove any sensitive IDs and keys.'
+  - type: checkboxes
+    id: tested
+    attributes:
+      label: Evidence type (select all that apply)
+      options:
+        - label: I reproduced this with two physical radio boards.
+        - label: I reproduced this with Android/BLE hardware.
+        - label: I reproduced this with the desktop browser/USB.
+        - label: I reproduced this only in a host/source test.
+        - label: I checked for duplicate issues and sanitized sensitive data.
