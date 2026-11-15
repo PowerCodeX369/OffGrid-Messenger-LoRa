@@ -129,4 +129,38 @@ static inline uint8_t og_auto_decide(og_auto_policy_t *p,uint8_t current,
     }
     return current;
 }
+/* The remote metric packet can be lost earlier than ordinary authenticated
+ * RX beacons. Do not freeze a safety downgrade just because its diagnostic
+ * report is missing. Peer Auto consent MUST have been authenticated, local
+ * RSSI/SNR MUST be fresh, and this fallback may only downgrade (never
+ * promote). Both radios still exchange signed OFFER/AGREE/verify. */
+static inline uint8_t og_auto_decide_linkaware(og_auto_policy_t *p,uint8_t mode,
+       uint32_t now,bool busy,bool rf_loss,bool authenticated_peer_auto){
+    if(!p || busy || !authenticated_peer_auto)return mode;
+    if(og_auto_fresh(&p->local,now) &&
+       og_auto_fresh(&p->remote,now) &&
+       (uint32_t)(now-p->remote.at_ms)<25000u)
+        return og_auto_decide(p,mode,now,false,rf_loss);
+    if(!og_auto_fresh(&p->local,now) ||
+       (uint32_t)(now-p->local.at_ms)>22000u ||
+       (uint32_t)(now-p->last_decision_ms)<OG_AUTO_METRIC_PERIOD_MS)
+        return mode;
+    const int16_t r=p->local.rssi_dbm,s=p->local.snr_q4;
+    bool weak=false;
+    switch(mode){
+        case OG_MODE_LOW:weak=rf_loss || r<=OG_AUTO_FAST_DOWN_RSSI || s<=OG_AUTO_FAST_DOWN_SNR_Q4;break;
+        case OG_MODE_BALANCED:weak=rf_loss || r<=OG_AUTO_BAL_DOWN_RSSI || s<=OG_AUTO_BAL_DOWN_SNR_Q4;break;
+        case OG_MODE_MAX:weak=rf_loss || r<=-108 || s<=-16;break;
+        default:return mode;
+    }
+    p->last_decision_ms=now;
+    p->up_streak=0;
+    p->down_streak=weak && p->down_streak<255?p->down_streak+1:0;
+    if(p->down_streak<OG_AUTO_DOWN_STREAK)return mode;
+    p->down_streak=0;
+    if(mode==OG_MODE_LOW && r<=OG_AUTO_FAST_RANGE_RSSI)return OG_MODE_MAX;
+    return mode==OG_MODE_LOW?OG_MODE_BALANCED:
+           mode==OG_MODE_BALANCED?OG_MODE_MAX:OG_MODE_ULTRA;
+}
+
 #endif
