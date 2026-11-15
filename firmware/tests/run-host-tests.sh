@@ -28,6 +28,12 @@ cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
    firmware/tests/test_profile_switch.c -o "$profile_bin"
 "$profile_bin"
 rm -f "$profile_bin"
+verify_bin=/tmp/offgrid-ultra-profile-verify-$$
+cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main -Ifirmware/main/ultra \
+    firmware/tests/test_ultra_profile_verify.c firmware/main/ultra/og_ultra_policy.c \
+    -o "$verify_bin"
+"$verify_bin"
+rm -f "$verify_bin"
 fifo_bin=/tmp/offgrid-lora-fifo-$$
 cc -std=c11 -Wall -Wextra -Werror -Wno-unused-variable \
     -Ifirmware/tests/host_stubs -Ifirmware/components/offgrid_sx1278/include \
@@ -92,6 +98,7 @@ node firmware/tests/test-diagnostic-protocol.cjs
 node firmware/tests/test-lora-delivery.cjs
 node firmware/tests/test-weak-text-retry.cjs
 node firmware/tests/test-web-rc3052-diagnostics.cjs
+node firmware/tests/test-rc4-text-submission.cjs
 node firmware/tests/test-lora-scheduler.cjs
 node firmware/tests/test-lora-receipts.cjs
 python3 tests/test_rc2_send_path.py

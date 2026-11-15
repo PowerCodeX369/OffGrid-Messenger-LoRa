@@ -25,6 +25,7 @@
 #include "lora_schedule.h"
 #include "lora_modes.h"
 #include "lora_profile_control.h"
+#include "lora_profile_verify_timing.h"
 #include "lora_auto.h"
 #include "ultra/og_ultra_policy.h"
 #include "og_arq_bridge.h"
@@ -173,6 +174,7 @@ static uint8_t last_profile_offer_mac[6];
 /* After confirming a new profile, continue short authenticated HELLOs so the
  * other node can also confirm its profile and avoid asymmetrical rollback. */
 static int64_t profile_assist_until_ms, profile_assist_next_ms;
+static bool profile_verify_initiator; /* OFFER sender has first SF12 HELLO slot */
 /* RF automation is opt-in and limited to the established single radio task.
  * A deterministic single leader (lower MAC) selects modes, based on recent
  * authenticated local + peer RSSI/SNR reports. The existing synchronized
@@ -478,6 +480,7 @@ static void profile_start_offer(uint8_t target, bool force, bool automatic, bool
     media_requested_profile=media;
     for(size_t i=0;i<OG_CTRL_QUEUE;i++)if(controls[i].frame.type==OG_TYPE_AUTO_METRIC)
         controls[i].frame.magic=0;
+    profile_verify_initiator=true;
     profile_state.previous=profile_state.current;
     profile_state.target=target;
     profile_state.phase=OG_PROFILE_OFFERING;
@@ -547,9 +550,13 @@ static void profile_service(void) {
         }
         profile_state.phase=OG_PROFILE_VERIFYING;
         profile_state.verify_deadline_ms=millis()+
-             (profile_state.current==OG_MODE_ULTRA?36000:OG_PROFILE_VERIFY_MS);
-        profile_state.probe_at_ms=0;
-        output("PROFILE|VERIFYING|%s\n",og_mode_name(profile_state.current));
+             (profile_state.current==OG_MODE_ULTRA?OG_ULTRA_VERIFY_MAX_MS:OG_PROFILE_VERIFY_MS);
+        profile_state.probe_at_ms=millis()+og_verify_first_delay_ms(profile_state.current,
+                                                        profile_verify_initiator);
+        output("PROFILE|VERIFYING|%s|ROLE=%s|FIRST_HELLO_MS=%" PRIu32 "\n",
+               og_mode_name(profile_state.current),
+               profile_verify_initiator?"INITIATOR":"RESPONDER",
+               og_verify_first_delay_ms(profile_state.current,profile_verify_initiator));
     }
     if(profile_state.phase==OG_PROFILE_VERIFYING){
         if(now>=profile_state.verify_deadline_ms){
@@ -571,7 +578,8 @@ static void profile_service(void) {
             og_frame_t hello=new_frame(OG_TYPE_HELLO,boot_session,0);
             (void)tx(&hello);
             profile_state.probe_at_ms=millis()+
-                (profile_state.current==OG_MODE_ULTRA?5000:650)+(esp_random()%250);
+                og_verify_repeat_after_tx_ms(profile_state.current)+
+                (profile_state.current==OG_MODE_ULTRA?0:(esp_random()%250));
         }
     }
     if(profile_state.phase==OG_PROFILE_IDLE && profile_assist_until_ms>now &&
@@ -579,7 +587,8 @@ static void profile_service(void) {
         og_frame_t hello=new_frame(OG_TYPE_HELLO,boot_session,0);
         (void)tx(&hello);
         profile_assist_next_ms=millis()+
-            (profile_state.current==OG_MODE_ULTRA?5500:530)+(esp_random()%220);
+            (profile_state.current==OG_MODE_ULTRA?OG_ULTRA_VERIFY_REPEAT_AFTER_TX_MS:530)+
+            (profile_state.current==OG_MODE_ULTRA?0:(esp_random()%220));
     }
 }
 static og_frame_t auto_control_frame(uint8_t type,bool enable,uint32_t session,uint32_t nonce){
@@ -727,7 +736,7 @@ static void media_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|PROFILE_SYNC=ULTRA_SLOTS4|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     char p[18];if(peer_seen)mac_text(peer_mac,p);else strcpy(p,"NONE");
@@ -793,7 +802,9 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         stat_profile_changes++;
         profile_assist_until_ms=millis()+
            (profile_state.current==OG_MODE_ULTRA?20000:3200);
-        profile_assist_next_ms=millis()+120+(esp_random()%180);
+        profile_assist_next_ms=millis()+
+            og_verify_assist_after_rx_ms(profile_state.current,profile_verify_initiator)+
+            (profile_state.current==OG_MODE_ULTRA?0:(esp_random()%180));
         profile_report("ACTIVE");
         if(media_requested_profile && media_boost_active){
             if(profile_state.current==OG_MODE_LOW){
@@ -934,6 +945,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
             last_profile_offer_nonce=f.id;
             last_profile_offer_session=f.session;
             memcpy(last_profile_offer_mac,f.sender,6);
+            profile_verify_initiator=false;
             profile_state.previous=profile_state.current;
             profile_state.target=f.data[0];
             profile_state.nonce=f.id;profile_state.offer_session=f.session;
