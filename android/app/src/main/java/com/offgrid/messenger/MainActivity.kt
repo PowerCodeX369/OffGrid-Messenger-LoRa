@@ -102,6 +102,9 @@ class MainActivity : ComponentActivity() {
     private val completedBulkIds = linkedMapOf<String,String>()
     private val items = mutableStateListOf<ChatItem>()
     private val pending = ArrayDeque<Transfer>()
+    private val weakRetry=WeakTextRetry()
+    private var weakRetryTimer:Runnable?=null
+    private var historyRestored=false
     private var isSending = false
     private var loRaCapable = false
     private var bleAuthenticated = false
@@ -209,8 +212,12 @@ class MainActivity : ComponentActivity() {
                         hiddenMessageIds.addAll(hidden)
                         val present=items.map { it.id }.toSet()
                         val old=stored.filterNot {it.id in present || it.id in hiddenMessageIds}
-                            .map { if(it.outgoing && it.status=="sending")it.copy(status="failed") else it }
+                            .map { if(it.outgoing && it.kind==OgmCodec.TEXT &&
+                                    it.status in setOf("sending","failed"))
+                                it.copy(status="waiting") else it }
                         items.addAll(0,old)
+                        historyRestored=true
+                        scheduleWeakRetry()
                         playedReceipts.addAll(old.filter { !it.outgoing && it.status=="played" }.map{it.id})
                         if(old.isNotEmpty())bleTrace("Restored ${old.size} encrypted messages from device")
                     }
@@ -228,11 +235,20 @@ class MainActivity : ComponentActivity() {
             if(ready){
                 link?.send("CAPS?")
                 connected=loRaCapable
-                if(connected)startNext()
+                if(connected){startNext();scheduleWeakRetry()}
             }else{
                 connected=false;loRaCapable=false
                 radioLink=null;bulk.reset();mediaReceiver.clear()
                 pending.firstOrNull()?.let{it.attempts=0}
+                // Keep a durable, encrypted text record, even if BLE vanishes
+                // midway through ciphertext staging or while awaiting an ACK.
+                items.indices.forEach { idx ->
+                    val item=items[idx]
+                    if(item.outgoing && item.kind==OgmCodec.TEXT && item.status=="sending")
+                        items[idx]=item.copy(status="waiting")
+                }
+                scheduleHistorySave()
+                weakRetryTimer?.let(mainHandler::removeCallbacks);weakRetryTimer=null
                 isSending=false;stopMediaTimer();mediaMode="idle";mediaHintSent=false
                 power18Confirmed=false;powerApprovalRequest=null;waitingForPowerAck=null
                 powerAckTimer?.let(mainHandler::removeCallbacks);powerAckTimer=null
@@ -259,6 +275,7 @@ class MainActivity : ComponentActivity() {
         manualAutoTimer?.let(mainHandler::removeCallbacks)
         requestedRadioTimer?.let(mainHandler::removeCallbacks)
         scheduledHistory?.let(mainHandler::removeCallbacks)
+        weakRetryTimer?.let(mainHandler::removeCallbacks)
         val finalSnapshot=items.toList()
         historyWorker.execute { runCatching { history.save(finalSnapshot) } }
         historyWorker.shutdown()
@@ -312,10 +329,55 @@ class MainActivity : ComponentActivity() {
             keepBleBackground=false
         }
     }
+    private fun freshLoRaPeer():Boolean {
+        val info=radioLink?:return false
+        // A phone's BLE state is NOT a LoRa delivery indicator. RFHEARD/age
+        // derives from an authenticated peer frame (STATUS/LINK telemetry).
+        return info.hasPeer && info.rssiDbm!=null && info.normalPeerAgeMs?.let {it in 0L..29_999L}==true
+    }
+    private fun scheduleWeakRetry(){
+        weakRetryTimer?.let(mainHandler::removeCallbacks)
+        if(activityDestroyed || !connected || !historyRestored)return
+        val task=Runnable {weakRetryTimer=null;pumpWaitingText()}
+        weakRetryTimer=task
+        mainHandler.postDelayed(task,12_000L)
+    }
+    private fun deferText(id:String,why:String){
+        val idx=items.indexOfFirst{it.id==id && it.outgoing && it.kind==OgmCodec.TEXT}
+        if(idx>=0 && items[idx].status !in listOf("delivered","read","played")){
+            items[idx]=items[idx].copy(status="waiting")
+            weakRetry.postpone(id,System.currentTimeMillis())
+            scheduleHistorySave()
+            state="Text saved encrypted; retry after usable LoRa peer traffic ($why)"
+        }
+    }
+    private fun pumpWaitingText(){
+        try{
+            if(!connected || !historyRestored || !freshLoRaPeer() ||
+                isSending || bulk.busy || pending.isNotEmpty() || mediaMode!="idle" ||
+                requestedRadioMode!=null || powerApprovalRequest!=null)return
+            val now=System.currentTimeMillis()
+            val item=items.firstOrNull{ it.outgoing && it.kind==OgmCodec.TEXT &&
+                it.status in setOf("waiting","sent") &&
+                weakRetry.due(it.id,now,true) &&
+                (it.status=="waiting" || now-it.timestamp>=WeakTextRetry.receiptWait(radioLink?.activeProfile=="ULTRA")) }
+            if(item!=null){
+                weakRetry.attempt(item.id,now)
+                val index=items.indexOfFirst{it.id==item.id}
+                if(index>=0)items[index]=item.copy(status="sending")
+                // Re-seal from encrypted history, same application ID but new
+                // radio transfer ID. Receiver suppresses duplicate ChatItems.
+                pushEnvelope(OgmCodec.TEXT,item.id,item.text.toByteArray(Charsets.UTF_8))
+                scheduleHistorySave()
+            }
+        }finally{scheduleWeakRetry()}
+    }
     private fun retryFailed(item:ChatItem) {
-        if(!connected || !item.outgoing || item.status!="failed")return
+        if(!connected || !item.outgoing || item.status !in setOf("failed","waiting"))return
         val index=items.indexOfFirst {it.id==item.id}
         if(index<0)return
+        if(pending.any{it.messageId==item.id})return
+        weakRetry.attempt(item.id,System.currentTimeMillis())
         items[index]=item.copy(status="sending",progress=0)
         when(item.kind){
             OgmCodec.TEXT -> pushEnvelope(item.kind,item.id,item.text.toByteArray(Charsets.UTF_8))
@@ -524,9 +586,14 @@ class MainActivity : ComponentActivity() {
                 mainHandler.postDelayed({if(connected)startNext()},350L*job.attempts)
             }else{
                 pending.removeFirst()
-                if(!job.control)updateReceipt(job.messageId,"failed")
-                state="LoRa confirmation unavailable; retry the message"
-                if(job.media)endMediaSession() else startNext()
+                if(!job.control){
+                    val isText=items.any{it.id==job.messageId && it.outgoing && it.kind==OgmCodec.TEXT}
+                    if(isText)deferText(job.messageId,reason)
+                    else updateReceipt(job.messageId,"failed")
+                }
+                state=if(job.media) "LoRa media confirmation unavailable; retry manually" else
+                    "Text held for automatic retry when LoRa is usable"
+                if(job.media)endMediaSession() else {startNext();scheduleWeakRetry()}
             }
             return
         }
@@ -537,8 +604,12 @@ class MainActivity : ComponentActivity() {
         }
         if(job.index==job.frames.size){
             pending.removeFirst()
-            if(!job.control)updateReceipt(job.messageId,"sent")
-            if(job.media)endMediaSession() else startNext()
+            if(!job.control){
+                updateReceipt(job.messageId,"sent")
+                if(items.any{it.id==job.messageId && it.kind==OgmCodec.TEXT})
+                    weakRetry.holdForReceipt(job.messageId,System.currentTimeMillis(),radioLink?.activeProfile=="ULTRA")
+            }
+            if(job.media)endMediaSession() else {startNext();scheduleWeakRetry()}
         }else{
             // A completed media ciphertext segment is the only safe BLE/ARQ
             // preemption boundary. Keep the same media Fast session active.
@@ -598,6 +669,7 @@ class MainActivity : ComponentActivity() {
         val id=OgmCodec.newId()
         items.add(ChatItem(id,value,true,System.currentTimeMillis(),"sending"))
         scheduleHistorySave()
+        weakRetry.attempt(id,System.currentTimeMillis())
         pushEnvelope(OgmCodec.TEXT,id,value.toByteArray(Charsets.UTF_8))
     }
     private fun sendPhoto(uri:Uri) {
@@ -709,6 +781,7 @@ class MainActivity : ComponentActivity() {
     }
     private fun updateReceipt(targetId:String,status:String) {
         val index=items.indexOfFirst { it.id==targetId && it.outgoing }
+        if(status in listOf("delivered","read","played"))weakRetry.acknowledged(targetId)
         if(index>=0) {
             val current=items[index]
             val next=ReceiptStates.advance(current.status,status)
@@ -797,15 +870,17 @@ class MainActivity : ComponentActivity() {
         when(split.firstOrNull()){
             "CAPS" -> {
                 val fields=split.drop(1).toSet()
-                val valid=fields.containsAll(setOf("FAMILY=LORA","PROTO=2","MEDIA=1","BULK=1"))
+                val valid=fields.containsAll(setOf("FAMILY=LORA","PROTO=2","MEDIA=1","BULK=1","RF_POLICY=ULTRA12_FEC8"))
                 loRaCapable=valid
                 connected=bleAuthenticated && valid
                 state=if(connected)"Connected · authenticated LoRa BLE" else
                     "LoRa BLE bulk unavailable: flash the companion BLE firmware on both radios"
-                if(connected)startNext()
+                if(connected){startNext();scheduleWeakRetry()}
             }
             "READY" -> if(connected)state="ESP32 LoRa ready"
-            "LINK" -> radioLink=RadioLink.parse(line)
+            "LINK" -> {radioLink=RadioLink.parse(line)
+                if(freshLoRaPeer() && weakRetryTimer==null)scheduleWeakRetry()
+            }
             "PROFILE","AUTO","MEDIA","POWER18" -> {
                 bleTrace(line.take(180))
                 val event=split.getOrNull(1)

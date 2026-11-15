@@ -70,7 +70,7 @@ class LoRaNativeBulk(
                 }
             }
             "BULKQUEUED"->if(t.state=="end"){
-                t.state="radio";watch(if(t.ultra)45_000+((t.data.size+47)/48)*14_000L
+                t.state="radio";watch(if(t.ultra)minOf(1_800_000L,180_000L+((t.data.size+47)/48)*40_000L)
                                  else 22_000+((t.data.size+223)/224)*4_500L)
             }
             "BULKSENT"->{if(!t.sent){t.sent=true;transmitted()}}
