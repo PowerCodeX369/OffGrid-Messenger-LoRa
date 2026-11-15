@@ -21,7 +21,8 @@ assert 'OG_AUTO_METRIC_FRESH_MS 90000u' in auto and 'current==OG_MODE_ULTRA' in 
 assert 'peer_ultra_capable' in fw and 'ARQ_CAPS' in fw and 'ULTRA_REQUIRES_BOTH' in fw
 assert 'PROFILE LOW/BALANCED/MAX/ULTRA' in fw
 assert 'MEDIA|ERROR|ULTRA_TEXT_ONLY' in fw and 'c->bulk_media' in fw
-assert 'ULTRA_TEXT_TOO_LONG' in fw and 'og_ultra_ack_wait_ms' in fw and 'og_ultra_airtime_ms' in fw
+assert 'ULTRA_TEXT_TOO_LONG' in fw and 'og_lora_arq_ack_rto_ms' in fw and 'og_ultra_airtime_ms' in fw
+assert 'og_ultra_ack_wait_ms' in read('firmware/main/lora_arq_timing.h')
 assert 'og_arq_bridge_set_ultra(&arq,false' in fw
 assert 'SF12' in radio and 'PROFILE ULTRA' in radio
 assert 'Ultra SF12 is text only. Photos are disabled' in app

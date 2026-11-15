@@ -26,8 +26,8 @@ static bool verify(void *ctx,const uint8_t *d,size_t n,const uint8_t tag[16]) {
 }
 static bool radio(void *ctx,const uint8_t *d,size_t n) {
     device *a=ctx,*b=a->other;
-    if(d[1]==OG_SR_DATA && a->dropped_data<a->drop_data_budget && d[3]==1){a->dropped_data++;return true;}
-    if(d[1]==OG_SR_BITMAP_ACK && a->dropped_ack<a->drop_ack_budget){a->dropped_ack++;return true;}
+    if(n!=OG_SR_TAG && d[1]==OG_SR_DATA && a->dropped_data<a->drop_data_budget && d[3]==1){a->dropped_data++;return true;}
+    if((n==OG_SR_TAG || d[1]==OG_SR_BITMAP_ACK) && a->dropped_ack<a->drop_ack_budget){a->dropped_ack++;return true;}
     assert(b->qtail<128);
     memcpy(b->queue[b->qtail],d,n);b->lengths[b->qtail++]=n;return true;
 }
@@ -54,7 +54,9 @@ static void setup(device *d) {
 static void deliver(device *d){
     while(d->qhead<d->qtail){
         const uint8_t *wire=d->queue[d->qhead];size_t n=d->lengths[d->qhead++];
-        if(wire[1]==OG_SR_DATA) {
+        if(n==OG_SR_TAG){
+            assert(d->b.compact_ack_active);
+        }else if(wire[1]==OG_SR_DATA) {
             const uint8_t flags=wire[2];
             assert((flags&OG_SR_FLAG_ULTRA)!=0);
             assert(og_sr_payload_from_flags(flags)<=96);
@@ -98,7 +100,8 @@ int main(void){
     scenario(730,64,true,false);
     scenario(1980,80,false,true);
     scenario(2950,96,true,true);
-    assert(og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,34)>1200);
-    assert(og_ultra_ack_wait_ms(34,0)>og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,34));
+    assert(og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,OG_SR_TAG)>900);
+    assert(og_ultra_ack_wait_ms(OG_SR_TAG,0)>
+           og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,OG_SR_TAG));
     printf("PASS: Ultra SF12 authenticated selective ARQ, five lost consecutive ACKs, 48-96 B ciphertext, integrity\n");
 }

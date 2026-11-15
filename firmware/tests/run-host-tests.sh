@@ -78,6 +78,21 @@ cc -std=c11 -O2 -Wall -Wextra -Werror \
     firmware/main/ultra/og_ultra_policy.c -o "$ultra_bin"
 "$ultra_bin"
 rm -f "$ultra_bin"
+compact_bin=/tmp/offgrid-compact-arq-$$
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -Ifirmware/components/offgrid_arq/include firmware/tests/test_compact_range_arq.c \
+    firmware/components/offgrid_arq/og_arq_bridge.c firmware/components/offgrid_arq/og_sr.c \
+    firmware/components/offgrid_arq/og_sr_usb.c -o "$compact_bin"
+"$compact_bin"
+rm -f "$compact_bin"
+timing_bin=/tmp/offgrid-range-airtime-$$
+cc -std=c11 -O2 -Wall -Wextra -Werror \
+    -Ifirmware/main -Ifirmware/components/offgrid_arq/include \
+    -Ifirmware/components/offgrid_sx1278/include \
+    firmware/tests/test_range_ack_timing.c firmware/main/ultra/og_ultra_policy.c \
+    firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c -o "$timing_bin"
+"$timing_bin"
+rm -f "$timing_bin"
 ble_mobile_bin=/tmp/offgrid-ble-mobile-policy-$$
 cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main firmware/tests/test_ble_mobile_bulk.c -o "$ble_mobile_bin"
 "$ble_mobile_bin"
