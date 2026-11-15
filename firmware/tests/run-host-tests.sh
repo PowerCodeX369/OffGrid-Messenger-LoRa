@@ -135,3 +135,4 @@ python3 tests/test_v18_media.py
 python3 tests/test_v18_ui_source.py
 
 python3 tests/test_v306_recovery_contract.py
+python3 tests/test_v306_rc2_compact_ack_contract.py
