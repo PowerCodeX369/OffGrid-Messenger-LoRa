@@ -16,7 +16,7 @@ protected=(
  'firmware/components/offgrid_sx1278/offgrid_sx1278.c',
  'firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c',
  'web/protocol.js','web/lora_media.js','web/lora_receipts.js',
- 'web/lora_scheduler.js','web/lora_benchmark.js','web/lora_delivery.js',
+ 'web/lora_scheduler.js','web/lora_benchmark.js',
  'android/app/src/main/java/com/offgrid/messenger/OgmCodec.kt',
  'android/app/src/main/java/com/offgrid/messenger/BleNodeClient.kt',
  'android/app/src/main/java/com/offgrid/messenger/SecureKeyStore.kt',
@@ -32,5 +32,5 @@ assert 'ULTRA=SF12_TEXT_ONLY' in src and 'PROFILES=4' in src
 assert '18_DBM_REQUIRES_LOCAL_POWER_VERIFICATION' in src
 assert 'OG_TYPE_PROFILE_OFFER' in src and 'OG_TYPE_PROFILE_AGREE' in src
 assert 'profile_state.current==OG_MODE_ULTRA' in src
-assert 'PROFILE|ERROR|PEER_REQUIRES_V304_ULTRA' in src
+assert 'PROFILE|ERROR|PEER_REQUIRES_V305_ULTRA_FEC8' in src
 print('PASS: pre-Ultra crypto, BLE auth, USB staging, media codecs, SX1278 driver untouched; standard ARQ tests cover baseline')

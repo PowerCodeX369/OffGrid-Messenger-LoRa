@@ -1,0 +1,24 @@
+// No DOM, USB or RF dependency: prove backoff does not fake delivery.
+'use strict';
+const assert=require('node:assert/strict');
+const Retry=require('../../web/weak_text_queue.js');
+const Del=require('../../web/lora_delivery.js');
+const q=Retry.make();
+assert.equal(q.due('m1',1000,false),false);
+assert.equal(q.due('m1',1000,true),true);
+assert.equal(q.attempt('m1',1000),1);
+assert.equal(q.due('m1',15999,true),false);
+assert.equal(q.due('m1',16000+q.jitter('m1'),true),true);
+assert.equal(q.attempt('m1',16000),2);
+assert.equal(q.due('m1',45999,true),false);
+assert.equal(q.due('m1',46000+q.jitter('m1'),true),true);
+q.holdForReceipt('m1',46000,true);
+assert.equal(q.due('m1',285999,true),false);
+assert.equal(q.due('m1',286000,true),true);
+assert.equal(Del.receiptTimeoutMs(1,true)>=180000,true);
+assert.equal(Del.receiptTimeoutMs(1,false)<Del.receiptTimeoutMs(1,true),true);
+q.clear('m1');assert.equal(q.due('m1',100,true),true);
+for(let i=1;i<=15;i++)q.attempt('m2',i*1e6);
+assert.equal(q.delay(15),300000);
+q.reset();assert.equal(q.due('m2',1,true),true);
+console.log('PASS: web deferred encrypted text queue, no stale peer sending, long Ultra receipt RTO, bounded exponential backoff');

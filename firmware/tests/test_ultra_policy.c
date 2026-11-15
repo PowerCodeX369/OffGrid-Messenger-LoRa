@@ -5,9 +5,12 @@
 
 int main(void){
   /* SF12/BW125 symbol 32.768 ms; DE mandatory. Good-packet airtime verifies
-   * Semtech Rev7 §4.1.1.7, explicit header and CRC, 8 preamble, CR4/5. */
-  assert(OG_ULTRA_MODEM_CONFIG1==0x72u && OG_ULTRA_MODEM_CONFIG2==0xC4u);
+   * Semtech Rev7 §4.1.1.7, explicit header and CRC, 8 preamble, CR4/5 baseline and CR4/8 Ultra. */
+  assert(OG_ULTRA_MODEM_CONFIG1==0x78u && OG_ULTRA_MODEM_CONFIG2==0xC4u);
   assert(OG_ULTRA_MODEM_CONFIG3==0x0Cu);
+  assert(OG_ULTRA_CR_DENOM==8u);
+  assert(og_ultra_airtime_ms(12,125000,8,8,64)>
+         og_ultra_airtime_ms(12,125000,5,8,64));
   assert(og_ultra_airtime_ms(12,125000,5,8,64)==2794);
   assert(og_ultra_airtime_ms(12,125000,5,8,38)==1975);
   assert(og_ultra_airtime_ms(12,125000,5,8,0)==0);

@@ -20,7 +20,7 @@ int main(void) {
         offgrid_sx1278_register_profile_t r={0};
         assert(offgrid_sx1278_make_registers(&p,&r));
         assert(p.frequency_hz==433000000u && p.sync_word==0x2d);
-        assert(p.coding_denominator==5 && p.preamble_symbols==8);
+        assert(p.coding_denominator==(i==OG_MODE_ULTRA?8:5) && p.preamble_symbols==8);
         assert(og_mode_ack_wait_ms((uint8_t)i,2)>og_mode_ack_wait_ms((uint8_t)i,0));
     }
     offgrid_sx1278_profile_t low=og_mode_profile(OG_MODE_LOW);
@@ -40,7 +40,7 @@ int main(void) {
     offgrid_sx1278_profile_t ultra=og_mode_profile(OG_MODE_ULTRA);
     assert(ultra.spreading_factor==12 && ultra.bandwidth==OFFGRID_SX1278_BW_125_KHZ && ultra.high_pa_dac);
     assert(offgrid_sx1278_make_registers(&ultra,&reg));
-    assert(reg.modem_config1==0x72 && reg.modem_config2==0xC4 && reg.modem_config3==0x0C);
+    assert(reg.modem_config1==0x78 && reg.modem_config2==0xC4 && reg.modem_config3==0x0C);
     assert(max.spreading_factor==9 && max.bandwidth==OFFGRID_SX1278_BW_125_KHZ);
     assert(max.tx_power_dbm<=18);
     assert(!offgrid_sx1278_profile_valid(&(offgrid_sx1278_profile_t){

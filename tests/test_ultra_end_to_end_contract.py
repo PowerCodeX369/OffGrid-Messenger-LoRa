@@ -29,9 +29,9 @@ assert 'Ultra SF12 is text only. Voice notes are disabled' in app
 assert 'job.media && radioLink?.activeProfile=="ULTRA"' in app
 assert 'Ultra Long Range' in read('android/app/src/main/java/com/offgrid/messenger/PremiumUi.kt')
 assert 'Ultra Long Range' in web and 'currentProfile===\'ULTRA\'' in web
-assert 'a.media?\'MEDIA\'' in bulk and '45000+Math.ceil(ciphertext.length/48)*14000' in bulk
+assert 'a.media?\'MEDIA\'' in bulk and 'Math.min(1_800_000,180_000+Math.ceil(ciphertext.length/48)*40_000)' in bulk
 assert "currentProfile==='ULTRA'" in web and 'Ultra SF12 is text only. Voice notes are disabled' in web
 assert 'ULTRA=SF12_TEXT_ONLY' in fw and 'PROFILES=4' in fw
-assert 'versionCode=304' in read('android/app/build.gradle.kts')
+assert 'versionCode=305' in read('android/app/build.gradle.kts')
 assert 'ULTRA=SF12_TEXT_ONLY' in read('firmware/main/ble_bridge.c')
 print('PASS: native/web/firmware SF12 mode + authenticated capability gates + text-only/media rejection + timing contracts')

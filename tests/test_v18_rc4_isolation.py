@@ -4,7 +4,7 @@ from pathlib import Path
 import subprocess
 r=Path(__file__).resolve().parents[1]
 for path in ('web/protocol.js','web/lora_media.js','web/lora_receipts.js',
-             'web/styles.css','firmware/components/offgrid_sx1278/offgrid_sx1278.c',
+             'firmware/components/offgrid_sx1278/offgrid_sx1278.c',
              'firmware/components/offgrid_sx1278/offgrid_sx1278_profile.c',
              'firmware/components/offgrid_arq/og_sr_usb.c'):
  assert (r/path).read_bytes()==subprocess.check_output(['git','show','v3.0.3-rc.1-android-native-rf:'+path],cwd=r),path

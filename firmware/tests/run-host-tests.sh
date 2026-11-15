@@ -90,11 +90,13 @@ node firmware/tests/test-protocol.cjs
 node firmware/tests/test-adaptive.cjs
 node firmware/tests/test-diagnostic-protocol.cjs
 node firmware/tests/test-lora-delivery.cjs
+node firmware/tests/test-weak-text-retry.cjs
 node firmware/tests/test-lora-scheduler.cjs
 node firmware/tests/test-lora-receipts.cjs
 python3 tests/test_rc2_send_path.py
 python3 tests/test_boundaries.py
 python3 tests/test_ultra_end_to_end_contract.py
+python3 tests/test_weak_link_release.py
 python3 tests/test_v15_profile.py
 python3 tests/test_v161_rc2_regression.py
 python3 tests/test_v17_adaptive.py

@@ -15,7 +15,7 @@ struct device {
     uint8_t queue[128][OG_SR_WIRE_MAX];size_t lengths[128];unsigned qhead,qtail;
     uint8_t receive[OG_SR_MAX_TRANSFER];size_t rxlen;
     unsigned complete,fail,rx_done,dropped_data,dropped_ack,retransmissions;
-    bool drop_data,drop_ack;
+    unsigned drop_data_budget,drop_ack_budget;
 };
 static bool sign(void *ctx,const uint8_t *d,size_t n,uint8_t tag[16]) {
     (void)ctx;uint8_t x[16]={0};for(size_t i=0;i<n;i++)x[i%16]^=(uint8_t)(d[i]+i);
@@ -26,8 +26,8 @@ static bool verify(void *ctx,const uint8_t *d,size_t n,const uint8_t tag[16]) {
 }
 static bool radio(void *ctx,const uint8_t *d,size_t n) {
     device *a=ctx,*b=a->other;
-    if(d[1]==OG_SR_DATA && a->drop_data && !a->dropped_data && d[3]==1){a->dropped_data++;return true;}
-    if(d[1]==OG_SR_BITMAP_ACK && a->drop_ack && !a->dropped_ack){a->dropped_ack++;return true;}
+    if(d[1]==OG_SR_DATA && a->dropped_data<a->drop_data_budget && d[3]==1){a->dropped_data++;return true;}
+    if(d[1]==OG_SR_BITMAP_ACK && a->dropped_ack<a->drop_ack_budget){a->dropped_ack++;return true;}
     assert(b->qtail<128);
     memcpy(b->queue[b->qtail],d,n);b->lengths[b->qtail++]=n;return true;
 }
@@ -63,10 +63,10 @@ static void deliver(device *d){
     }
     d->qhead=d->qtail=0;
 }
-static void scenario(size_t size,uint8_t payload,bool drop_data,bool drop_ack){
+static void scenario(size_t size,uint8_t payload,unsigned drop_data,unsigned drop_ack){
     device *a=calloc(1,sizeof(*a)),*b=calloc(1,sizeof(*b));assert(a&&b);
     setup(a);setup(b);a->other=b;b->other=a;
-    a->drop_data=drop_data;b->drop_ack=drop_ack;
+    a->drop_data_budget=drop_data;b->drop_ack_budget=drop_ack;
     og_arq_bridge_set_ultra(&a->b,true,payload,payload==48?1u:2u);
     og_arq_bridge_set_ultra(&b->b,true,payload,2);
     uint8_t data[3072];for(size_t i=0;i<size;i++)data[i]=(uint8_t)(i*37u+11u);
@@ -86,18 +86,19 @@ static void scenario(size_t size,uint8_t payload,bool drop_data,bool drop_ack){
     }
     assert(a->complete==1&&a->fail==0&&b->rx_done==1);
     assert(b->rxlen==size&&!memcmp(data,b->receive,size));
-    assert(!drop_data||a->dropped_data==1);
-    assert(!drop_ack||b->dropped_ack==1);
+    assert(a->dropped_data==drop_data);
+    assert(b->dropped_ack==drop_ack);
     if(drop_data||drop_ack)assert(a->b.retransmits>0);
     free(a);free(b);
 }
 int main(void){
     scenario(52,48,false,false);
+    scenario(52,48,0,5); /* Deep fade: FIVE consecutive authenticated ACK losses */
     scenario(560,48,true,true);
     scenario(730,64,true,false);
     scenario(1980,80,false,true);
     scenario(2950,96,true,true);
-    assert(og_ultra_airtime_ms(12,125000,5,8,34)>1200);
-    assert(og_ultra_ack_wait_ms(34,0)>og_ultra_airtime_ms(12,125000,5,8,34));
-    printf("PASS: Ultra SF12 authenticated selective ARQ with 48/64/80/96-byte fragments, lost data+ACK recovery and ciphertext integrity\n");
+    assert(og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,34)>1200);
+    assert(og_ultra_ack_wait_ms(34,0)>og_ultra_airtime_ms(12,125000,OG_ULTRA_CR_DENOM,8,34));
+    printf("PASS: Ultra SF12 authenticated selective ARQ, five lost consecutive ACKs, 48-96 B ciphertext, integrity\n");
 }
