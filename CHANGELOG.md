@@ -1,3 +1,12 @@
+## v3.0.6-rc.2 — SF9/SF12 compact ACK & airtime-guarded transfers (2026-11-15)
+
+- Fix the reported long SF9 text latency and failed SF12 text transmissions by replacing 34-byte bitmap ACKs with **16-byte full authenticated HMAC-SHA256-128 tags**. Active transfer IDs and at most three outstanding bitmap candidates reconstruct metadata without shortening the cryptographic tag.
+- Defer opportunistic HELLO/CAPS/Auto metric control traffic during a slow-profile ARQ transfer so a half-duplex ACK receive window is not interrupted.
+- Fix SF12 ACK/DATA collisions caused by the previous 350-ms partial-ACK silence timer, now computed from next-fragment airtime (CR4/8 included). SF9 uses its own airtime-aware silence instead of a fixed potentially inappropriate delay; final-burst ACKs remain fast.
+- Use 128-byte text fragments in SF9 Max, preserve original 224-byte SF9 media capacity, and keep Ultra's already-small 48/64/80/96-byte text fragmentation. Preserve existing Fast/Balanced ACK layout and all radio modulation/power configurations.
+- Require authenticated `ARQ_CAPS=4` on both peers before enabling Max/Ultra compact ACK format; reject mixed versions safely. Add `ACK_COMPACT=16|ARQ_CAP=4|MAX_TEXT_FRAG=128` to READY. Existing Android/web code and BLE pairing remain unchanged.
+- Add deterministic host tests for lost DATA/ACK, partial bitmap, stale/wrong-session/forged compact ACK, and correct SF9/SF12 wait windows. **No ESP-IDF target APK or actual RF hardware test was performed**. See `docs/V3_0_6_RC2_COMPACT_ACK_RANGE_ULTRA.md`.
+
 ## v3.0.6-rc.1 — Peer rediscovery and reliable automatic RF downgrade (2026-11-15)
 
 - **Recover from split modulation:** after prolonged absence of authenticated peer traffic on a non-Balanced profile, periodically rendezvous on the common SF7/BW250 boot modulation; only remain there after verifying a peer HMAC. Return home and retry if not found. Keep SF9 and SF12 configurations unchanged.
