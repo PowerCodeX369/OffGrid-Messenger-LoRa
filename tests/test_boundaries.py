@@ -44,7 +44,7 @@ assert 'fifo_burst' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.
 assert 'SPI_DMA_CH_AUTO' in (root/'firmware/components/offgrid_sx1278/offgrid_sx1278.c').read_text()
 assert 'OffGridLoRaDelivery' in web and 'RADIOACK' in web
 assert 'CTRLHEX ' in web and 'watchDeliveryReceipt' in web
-assert "1.8.0-rc.4" in main and "1.10.0-rc3-close-range-diagnostics" in web
+assert "1.8.0-rc.4" in main and "1.10.0-rc4-ultra-sync-diagnostics" in web
 assert 'PROFILES=4' in main and 'PROFILES=4' in web and 'SYNC=ONE_CLICK' in main and 'SYNC=ONE_CLICK' in web
 assert 'ARQ=1' in main and 'ARQ=1' in web
 assert 'BULKBEGIN' in main and 'BulkLink' in web

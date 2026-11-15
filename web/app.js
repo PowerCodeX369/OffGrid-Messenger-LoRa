@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.10.0-rc3-close-range-diagnostics';
+const APP_VERSION='1.10.0-rc4-ultra-sync-diagnostics';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -874,13 +874,18 @@ async function handleEnvelope(env,mac){
  }
  if(env.kind!==P.types.text&&env.kind!==P.types.image&&env.kind!==P.types.voice)return;
  let r=recordMap.get(env.id);
- if(r){if(r.dir==='in'){enqueueReceipt('delivered',r.id);if(r.readSent)enqueueReceipt('read',r.id);if(r.kind==='voice'&&r.played&&r.playedSent)enqueueReceipt('played',r.id);}return;}
+ if(r){if(r.dir==='in'){
+   logUsb(`RX_APP_DUPLICATE_ID|${r.id}|KIND=${r.kind}`);
+   enqueueReceipt('delivered',r.id);if(r.readSent)enqueueReceipt('read',r.id);
+   if(r.kind==='voice'&&r.played&&r.playedSent)enqueueReceipt('played',r.id);
+  }return;}
  if(env.kind===P.types.text){let text;try{text=P.textFrom(env.body);}catch{return;}if(countChars(text)>MAX_CHARS)return;r={id:env.id,kind:'text',dir:'in',ts:env.ts||Date.now(),text,status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
  else if(env.kind===P.types.image){if(env.body.length<2||env.body.length>Media.MAX_PHOTO+1)return;const mime=['image/webp','image/png','image/jpeg'][env.body[0]];if(!mime||!env.width||!env.height)return;r={id:env.id,kind:'image',dir:'in',ts:env.ts||Date.now(),mime,width:env.width,height:env.height,bytes:env.body.slice(1),status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
  else{let voice;try{voice=P.unpackVoice(env.body,env.width+env.height*65536);}catch{return;}
   r={id:env.id,kind:'voice',dir:'in',ts:env.ts||Date.now(),mime:voice.mime,durationMs:voice.durationMs,bytes:voice.bytes,status:'received',readSent:false,deliveredAckSent:false,peerMac:mac};}
  peerMac=mac;
  await appendRecord(r);
+ logUsb(`RX_APP_ACCEPTED|${r.id}|KIND=${r.kind}`);
  enqueueReceipt('delivered',r.id);
  if(isVisible())sendReadReceipts();else notifyIncoming(r);
 }
@@ -1240,7 +1245,11 @@ async function sendTextJob(job){
   weakTextRetry.postpone(r.id,Date.now());
   await setState(r,'waiting',e.message);
   logUsb('TEXT_FAILURE|'+String(e.message).slice(0,160));
-  toast('Text saved encrypted. Retrying when the LoRa peer is usable.');
+  const now=Date.now();
+  if(!sendTextJob.lastWeakNoticeAt || now-sendTextJob.lastWeakNoticeAt>12000){
+   toast('Text saved encrypted. Retrying when the LoRa peer is usable.');
+   sendTextJob.lastWeakNoticeAt=now;
+  }
  }finally{clearTimeout(stalled);}
 }
 async function sendOneQueuedTextBetweenMediaSegments(){
@@ -1526,16 +1535,32 @@ async function disconnect(){if(closing)return;closing=true;stopVoiceRecording(tr
  transferQueue=[];runningTransfers=false;
   if(receiptBatchTimer!==null){clearTimeout(receiptBatchTimer);receiptBatchTimer=null;}
   receiptPool.length=0;urgentReceipts.length=0;queuedReceipts.clear();pendingReads.clear();incoming.clear();rxGuard.clear();mediaReassembler.clear();localMac=null;secretKey=null;radioTelemetry.available=false;profileTransition=false;autoBusy=false;autoMode=false;highPaVerified=false;currentProfile='BALANCED';profileRadio={sf:7,bw:250000,power:10};refreshStatus();closing=false;}}
+/* A browser can deliver rapid click + Enter events while IndexedDB is
+ * asynchronously storing a message. Lock and clear synchronously BEFORE the
+ * first await; otherwise two independent IDs are created for one "hi". */
+let sendTextBusy=false;
 async function sendText(){
+ if(sendTextBusy)return;
  if(profileTransition){toast('Wait for the LoRa profile switch to finish');return;}
-const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
+ const input=$('messageInput'),text=input.value.trim();if(!verified||!secretKey||!text)return;
  if(countChars(text)>MAX_CHARS){toast('Maximum 500 characters per text message.');return;}
- const r={id:P.newId(),kind:'text',dir:'out',ts:Date.now(),text,status:'sending',progress:0,textClickedAt:performance.now()};
- await appendRecord(r);r.localSaveMs=performance.now()-r.textClickedAt;
- weakTextRetry.attempt(r.id,Date.now());
+ sendTextBusy=true;
  input.value='';updateByteCount();
- if(transferQueue.length>=MAX_TEXT_QUEUE){await setState(r,'failed','Local text queue is full; retry once it drains');toast('LoRa text queue full; let pending messages finish');return;}
- transferQueue.push(makeJob(r));void runTransfers();}
+ try{
+  const r={id:P.newId(),kind:'text',dir:'out',ts:Date.now(),text,status:'sending',progress:0,textClickedAt:performance.now()};
+  await appendRecord(r);r.localSaveMs=performance.now()-r.textClickedAt;
+  weakTextRetry.attempt(r.id,Date.now());
+  if(transferQueue.length>=MAX_TEXT_QUEUE){
+   await setState(r,'failed','Local text queue is full; retry once it drains');
+   toast('LoRa text queue full; let pending messages finish');return;
+  }
+  transferQueue.push(makeJob(r));void runTransfers();
+ }catch(e){
+  /* A failed encrypted local save is not a successfully queued message. */
+  input.value=text;updateByteCount();
+  toast('Message could not be queued locally: '+String(e?.message||e).slice(0,100));
+ }finally{sendTextBusy=false;}
+}
 function updatePrimaryAction(){const composer=$('composer'),input=$('messageInput'),voice=$('voiceButton'),send=$('sendButton');if(!composer||!input||!voice||!send)return;const hasText=!!input.value.trim();const recording=!!currentVoiceRecording;composer.classList.toggle('show-send',!recording&&hasText);composer.classList.toggle('show-voice',recording||!hasText);composer.classList.toggle('recording-mode',recording);voice.setAttribute('aria-hidden',(!recording&&hasText)?'true':'false');send.setAttribute('aria-hidden',(recording||!hasText)?'true':'false');}
 function updateByteCount(){const input=$('messageInput'),n=countChars(input.value);$('byteCount').textContent=`${n}/${MAX_CHARS}`;$('byteCount').classList.toggle('over',n>MAX_CHARS);input.style.height='36px';input.style.height=Math.min(120,input.scrollHeight)+'px';$('sendButton').disabled=!verified||!secretKey||!input.value.trim()||n>MAX_CHARS;updatePrimaryAction();}
 function convertCanvas(canvas,type,q){return new Promise(resolve=>canvas.toBlob(resolve,type,q));}
