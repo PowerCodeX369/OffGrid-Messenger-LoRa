@@ -33,6 +33,18 @@ void og_arq_bridge_set_ultra(og_arq_bridge_t *s,bool ultra,uint8_t payload,uint8
     s->ultra_active=ultra;
     s->configured_payload=ultra?payload:OG_SR_PAYLOAD;
     s->configured_window=ultra?window:OG_SR_MAX_WINDOW;
+    s->compact_ack_active=ultra || s->range_active;
+}
+void og_arq_bridge_set_range_mode(og_arq_bridge_t *s,bool max_range){
+    if(!s || s->tx_used || s->usb.active)return;
+    s->range_active=max_range;
+    s->compact_ack_active=s->range_active || s->ultra_active;
+}
+void og_arq_bridge_set_range_text_payload(og_arq_bridge_t *s,uint8_t payload){
+    if(!s || !s->range_active || s->tx_used || s->usb.active ||
+       (payload!=OG_SR_PAYLOAD && !(og_sr_flags_from_payload(payload)&OG_SR_FLAG_RANGE)))return;
+    s->configured_payload=payload;
+    s->configured_window=3u;
 }
 bool og_arq_bridge_busy(const og_arq_bridge_t *s){
     return s && (s->usb.active || s->tx_used || (s->rx_used && !s->rx_forwarded));
@@ -83,8 +95,8 @@ bool og_arq_bridge_end(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
     }
     memcpy(s->tx_bytes,s->usb_bytes,s->usb.received);
     if(!og_sr_tx_init_ex(&s->tx,session,transfer,s->tx_bytes,s->usb.received,
-           s->ultra_active?s->configured_window:OG_SR_MAX_WINDOW,
-           s->ultra_active?s->configured_payload:OG_SR_PAYLOAD)){
+           (s->ultra_active || s->range_active)?s->configured_window:OG_SR_MAX_WINDOW,
+           (s->ultra_active || s->range_active)?s->configured_payload:OG_SR_PAYLOAD)){
         emit_failure(io,session,transfer,"INVALID_TRANSFER");return false;
     }
     s->tx_used=true;s->tx_sent_announced=false;s->last_progress=0;
@@ -94,15 +106,21 @@ bool og_arq_bridge_end(og_arq_bridge_t *s,uint32_t session,uint32_t transfer,
     s->transfer_frames_base=s->tx_frames;
     s->transfer_retries_base=s->retransmits;
     s->transfer_timeouts_base=s->ack_timeouts;
+    if(s->compact_ack_active)emit(io,"ARQ|ACK_BYTES=16|HMAC=SHA256_128|MAX_WINDOW=3");
     char id[17],line[50];transfer_id(session,transfer,id);
     snprintf(line,sizeof(line),"BULKQUEUED|%s",id);emit(io,line);
     return true;
 }
 bool og_arq_bridge_receive(og_arq_bridge_t *s,const uint8_t *wire,size_t n,
                             uint32_t now,unsigned ack_silence_ms,const og_arq_io_t *io){
-    if(!s||!wire||!n||wire[0]!=OG_SR_VERSION)return false;
+    if(!s || !wire || !n)return false;
+    const bool compact=(n==OG_SR_TAG && s->compact_ack_active);
+    if(!compact && wire[0]!=OG_SR_VERSION)return false;
     og_sr_frame_t frame={0};
-    if(!io||!io->verify||!og_sr_decode(wire,n,&frame,io->verify,io->crypto)){
+    if(!io || !io->verify ||
+       !(compact ? (s->tx_used && og_sr_compact_ack_decode(wire,&s->tx,&frame,
+                                  io->verify,io->crypto)) :
+                    og_sr_decode(wire,n,&frame,io->verify,io->crypto))){
         s->reject_auth++;return true;
     }
     if(frame.type==OG_SR_BITMAP_ACK){
@@ -139,6 +157,7 @@ bool og_arq_bridge_receive(og_arq_bridge_t *s,const uint8_t *wire,size_t n,
     }
     if(!s->rx_used){
         if((s->ultra_active != ((frame.flags&OG_SR_FLAG_ULTRA)!=0)) ||
+           ((frame.flags&OG_SR_FLAG_RANGE) && !s->range_active) ||
            !og_sr_rx_init_ex(&s->rx,frame.session,frame.transfer,frame.count,
                            s->rx_bytes,sizeof(s->rx_bytes),og_sr_payload_from_flags(frame.flags)))return true;
         s->rx_used=true;s->rx_forwarded=false;s->rx_forwarding=false;
@@ -150,10 +169,13 @@ bool og_arq_bridge_receive(og_arq_bridge_t *s,const uint8_t *wire,size_t n,
     s->rx_last_at=now;
     return true;
 }
-static bool radio_send(const og_arq_io_t *io,const og_sr_frame_t *frame){
+static bool radio_send(const og_arq_io_t *io,const og_sr_frame_t *frame,bool compact){
     uint8_t wire[OG_SR_WIRE_MAX];size_t n=0;
-    if(!io||!io->sign||!io->radio_tx||
-       !og_sr_encode(frame,wire,sizeof(wire),&n,io->sign,io->crypto))return false;
+    if(!io || !io->sign || !io->radio_tx)return false;
+    if(compact && frame->type==OG_SR_BITMAP_ACK){
+        if(!og_sr_compact_ack_encode(frame,wire,io->sign,io->crypto))return false;
+        n=OG_SR_TAG;
+    }else if(!og_sr_encode(frame,wire,sizeof(wire),&n,io->sign,io->crypto))return false;
     return io->radio_tx(io->context,wire,n);
 }
 static void emit_rx(og_arq_bridge_t *s,const char *peer_mac,const og_arq_io_t *io){
@@ -191,7 +213,7 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
         og_sr_frame_t ack={.type=OG_SR_BITMAP_ACK,.session=s->last_session,
             .transfer=s->last_transfer,.count=s->last_count,
             .length=OG_SR_ACK_BYTES,.bitmap=s->last_bitmap};
-        if(radio_send(io,&ack)){s->bitmap_acks_tx++;s->duplicate_ack_pending=false;}
+        if(radio_send(io,&ack,s->compact_ack_active)){s->bitmap_acks_tx++;s->duplicate_ack_pending=false;}
         else s->duplicate_ack_due=now+100;
         return true;
     }
@@ -201,7 +223,7 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
         if(og_sr_rx_ack_due(&s->rx,now)){
             og_sr_frame_t ack={0};
             if(og_sr_rx_make_ack(&s->rx,&ack)){
-                if(radio_send(io,&ack))s->bitmap_acks_tx++;
+                if(radio_send(io,&ack,s->compact_ack_active))s->bitmap_acks_tx++;
                 else {s->rx.ack_pending=true;s->rx.ack_due_ms=now+100;}
             }
             return true;
@@ -248,7 +270,7 @@ bool og_arq_bridge_service(og_arq_bridge_t *s,uint32_t now,uint32_t entropy,
        (int32_t)(now-s->rx_last_at)<(int32_t)(ack_silence_ms+120))return false;
     og_sr_frame_t frame={0};
     if(!og_sr_tx_pick(&s->tx,&frame))return false;
-    const bool sent=radio_send(io,&frame);
+    const bool sent=radio_send(io,&frame,false);
     if(!sent){
         if(++s->tx_local_errors>=3){
             emit_failure(io,s->tx.session,s->tx.transfer,"RADIO_TX_FAILED");

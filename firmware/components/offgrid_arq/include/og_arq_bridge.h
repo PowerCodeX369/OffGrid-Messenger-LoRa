@@ -33,7 +33,7 @@ typedef struct {
     uint8_t tx_bytes[OG_SR_MAX_TRANSFER];
     og_sr_tx_t tx;
     uint8_t configured_payload, configured_window;
-    bool ultra_active;
+    bool ultra_active, range_active, compact_ack_active;
     bool tx_used, tx_urgent, tx_sent_announced;
     uint32_t tx_last_at, next_tx_at, last_progress;
     uint8_t tx_local_errors;
@@ -54,6 +54,10 @@ typedef struct {
 
 void og_arq_bridge_init(og_arq_bridge_t *s);
 void og_arq_bridge_set_ultra(og_arq_bridge_t *s,bool ultra,uint8_t payload,uint8_t window);
+/* Call when a verified SF9 or SF12 profile becomes active on BOTH peers. */
+void og_arq_bridge_set_range_mode(og_arq_bridge_t *s,bool max_range);
+/* Per outgoing TEXT transfer in SF9: media still uses the original 224 B. */
+void og_arq_bridge_set_range_text_payload(og_arq_bridge_t *s,uint8_t payload);
 bool og_arq_bridge_busy(const og_arq_bridge_t *s);
 void og_arq_bridge_cancel(og_arq_bridge_t *s,const og_arq_io_t *io,const char *reason);
 /* Split a browser's 64-bit AES-GCM transferId into two LE32 words. */

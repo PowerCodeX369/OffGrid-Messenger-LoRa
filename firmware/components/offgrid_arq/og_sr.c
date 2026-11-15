@@ -15,10 +15,12 @@ static uint32_t expected_mask(uint8_t n) {
 }
 static bool frame_ok(const og_sr_frame_t *f) {
     if(!f || !f->session || !f->transfer || f->count<1 ||
-       f->count>OG_SR_MAX_FRAGMENTS || (f->flags&~(OG_SR_FLAG_END_BURST|OG_SR_FLAG_ULTRA|OG_SR_FLAG_SIZE_MASK)))return false;
+       f->count>OG_SR_MAX_FRAGMENTS || (f->flags&~(OG_SR_FLAG_END_BURST|OG_SR_FLAG_ULTRA|OG_SR_FLAG_RANGE|OG_SR_FLAG_SIZE_MASK)))return false;
+    if((f->flags&OG_SR_FLAG_ULTRA) && (f->flags&OG_SR_FLAG_RANGE))return false;
     if(f->type==OG_SR_DATA){
         const uint8_t payload=og_sr_payload_from_flags(f->flags);
-        if(!(f->flags&OG_SR_FLAG_ULTRA) && (f->flags&OG_SR_FLAG_SIZE_MASK))return false;
+        if(!(f->flags&(OG_SR_FLAG_ULTRA|OG_SR_FLAG_RANGE)) && (f->flags&OG_SR_FLAG_SIZE_MASK))return false;
+        if((f->flags&OG_SR_FLAG_RANGE) && (f->flags&OG_SR_FLAG_SIZE_MASK)==OG_SR_FLAG_SIZE_MASK)return false;
         if(f->index>=f->count || f->length<1 || f->length>payload)return false;
         if(f->index+1<f->count && f->length!=payload)return false;
         return true;
@@ -47,6 +49,15 @@ bool og_sr_encode(const og_sr_frame_t *f,uint8_t *out,size_t capacity,
     else le32_put(out+OG_SR_HEADER,f->bitmap);
     if(!sign(crypto,out,OG_SR_HEADER+content,out+OG_SR_HEADER+content))return false;
     *written=total;
+    return true;
+}
+
+bool og_sr_compact_ack_encode(const og_sr_frame_t *ack,uint8_t tag16[OG_SR_TAG],
+                              og_sr_mac_sign_fn sign,void *crypto){
+    if(!tag16 || !sign || !frame_ok(ack) || ack->type!=OG_SR_BITMAP_ACK)return false;
+    uint8_t full[OG_SR_HEADER+OG_SR_ACK_BYTES+OG_SR_TAG];size_t n=0;
+    if(!og_sr_encode(ack,full,sizeof(full),&n,sign,crypto) || n!=sizeof(full))return false;
+    memcpy(tag16,full+OG_SR_HEADER+OG_SR_ACK_BYTES,OG_SR_TAG);
     return true;
 }
 
@@ -101,7 +112,8 @@ bool og_sr_tx_pick(og_sr_tx_t *t,og_sr_frame_t *f) {
     /* Ultra-only: extend selective ARQ retries without changing the proven
      * five-attempt Fast/Balanced/SF9 behavior. Retries never invent an ACK. */
     const unsigned limit=t->fragment_payload==OG_SR_PAYLOAD ?
-        OG_SR_MAX_ATTEMPTS : OG_SR_ULTRA_MAX_ATTEMPTS;
+        OG_SR_MAX_ATTEMPTS : t->fragment_payload>=128u ?
+        7u : OG_SR_ULTRA_MAX_ATTEMPTS;
     if(t->attempts[which]>=limit){t->phase=OG_SR_FAILED;return false;}
     memset(f,0,sizeof(*f));
     f->type=OG_SR_DATA;f->session=t->session;f->transfer=t->transfer;
@@ -149,6 +161,39 @@ bool og_sr_tx_ack(og_sr_tx_t *t,const og_sr_frame_t *ack) {
     if(t->acknowledged==expected_mask(t->fragments))t->phase=OG_SR_COMPLETE;
     else t->phase=OG_SR_MORE;
     return true;
+}
+
+/* The frame header and 32-bit bitmap are authenticated but implicit. The
+ * sender can verify every possible nonempty subset of up to three in-flight
+ * fragments. MAC covers session, transfer, count and full bitmap. A stale ACK
+ * from a previous burst cannot advance the current transfer. All 128 MAC
+ * bits remain on air; this is NOT weaker HMAC truncation. */
+bool og_sr_compact_ack_decode(const uint8_t tag16[OG_SR_TAG],
+                              const og_sr_tx_t *t,og_sr_frame_t *ack,
+                              og_sr_mac_verify_fn verify,void *crypto){
+    if(!tag16 || !t || !ack || !verify ||
+       (t->phase!=OG_SR_WAIT_ACK && t->phase!=OG_SR_MORE) ||
+       !t->session || !t->transfer || t->fragments==0)return false;
+    const uint32_t outstanding=t->transmitted & ~t->acknowledged;
+    const unsigned count=(unsigned)__builtin_popcount(outstanding);
+    if(count<1 || count>3)return false; /* absolute work bound: seven MAC checks */
+    /* Enumerate all nonempty subsets of the currently transmitted window. */
+    for(uint32_t subset=outstanding;subset;subset=(subset-1u)&outstanding){
+        const uint32_t bitmap=t->acknowledged|subset;
+        og_sr_frame_t candidate={.type=OG_SR_BITMAP_ACK,.session=t->session,
+            .transfer=t->transfer,.count=t->fragments,
+            .length=OG_SR_ACK_BYTES,.bitmap=bitmap};
+        if(!frame_ok(&candidate))return false;
+        uint8_t prefix[OG_SR_HEADER+OG_SR_ACK_BYTES]={0};
+        prefix[0]=OG_SR_VERSION;prefix[1]=(uint8_t)OG_SR_BITMAP_ACK;
+        prefix[4]=candidate.count;prefix[5]=OG_SR_ACK_BYTES;
+        le32_put(prefix+6,candidate.session);le32_put(prefix+10,candidate.transfer);
+        le32_put(prefix+OG_SR_HEADER,candidate.bitmap);
+        if(verify(crypto,prefix,sizeof(prefix),tag16)){
+            *ack=candidate;return true;
+        }
+    }
+    return false;
 }
 
 void og_sr_tx_tick(og_sr_tx_t *t,uint32_t now_ms) {

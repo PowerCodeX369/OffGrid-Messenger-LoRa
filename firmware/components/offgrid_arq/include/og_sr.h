@@ -28,14 +28,19 @@ extern "C" {
 #define OG_SR_FLAG_END_BURST 1u
 #define OG_SR_FLAG_ULTRA 2u
 #define OG_SR_FLAG_SIZE_MASK 12u
+/* MAX/SF9 text fragments: 128, 160, 192 bytes. Media stays 224. */
+#define OG_SR_FLAG_RANGE 16u
 #define OG_SR_ULTRA_MIN_PAYLOAD 48u
 #define OG_SR_ULTRA_MAX_PAYLOAD 96u
 static inline uint8_t og_sr_payload_from_flags(uint8_t flags) {
-    return (flags & OG_SR_FLAG_ULTRA) ? (uint8_t)(48u+16u*((flags>>2u)&3u)) : OG_SR_PAYLOAD;
+    return (flags & OG_SR_FLAG_ULTRA) ? (uint8_t)(48u+16u*((flags>>2u)&3u)) :
+           (flags & OG_SR_FLAG_RANGE) ? (uint8_t)(128u+32u*((flags>>2u)&3u)) : OG_SR_PAYLOAD;
 }
 static inline uint8_t og_sr_flags_from_payload(uint8_t n) {
     return n==OG_SR_PAYLOAD ? 0u : (n>=48u && n<=96u && (n-48u)%16u==0u) ?
-           (uint8_t)(OG_SR_FLAG_ULTRA | ((n-48u)/16u<<2u)) : 0xFFu;
+           (uint8_t)(OG_SR_FLAG_ULTRA | ((n-48u)/16u<<2u)) :
+           (n>=128u && n<=192u && (n-128u)%32u==0u) ?
+           (uint8_t)(OG_SR_FLAG_RANGE | ((n-128u)/32u<<2u)) : 0xFFu;
 }
 
 typedef enum {
@@ -72,6 +77,12 @@ bool og_sr_encode(const og_sr_frame_t *frame, uint8_t *out, size_t capacity,
                   size_t *written, og_sr_mac_sign_fn sign, void *crypto);
 bool og_sr_decode(const uint8_t *wire,size_t n,og_sr_frame_t *frame,
                   og_sr_mac_verify_fn verify,void *crypto);
+/* Max/Ultra-only 16-byte ACK: the full original HMAC-SHA256-128 over the
+ * exact 18-byte ACK preimage, not an 8-byte/unauthenticated shortcut.
+ * A <=3-fragment send window allows the sender to authenticate at most
+ * seven outstanding bitmap possibilities. Requires both peers updated. */
+bool og_sr_compact_ack_encode(const og_sr_frame_t *ack,uint8_t tag16[OG_SR_TAG],
+                              og_sr_mac_sign_fn sign,void *crypto);
 
 typedef struct {
     uint32_t session, transfer;
@@ -97,6 +108,9 @@ void og_sr_tx_done(og_sr_tx_t *tx,const og_sr_frame_t *frame,bool tx_done,
                    uint32_t at_ms,uint32_t ack_timeout_ms);
 /* Only call after a MAC-verified ACK from the expected peer. */
 bool og_sr_tx_ack(og_sr_tx_t *tx,const og_sr_frame_t *ack);
+bool og_sr_compact_ack_decode(const uint8_t tag16[OG_SR_TAG],
+                              const og_sr_tx_t *tx,og_sr_frame_t *ack,
+                              og_sr_mac_verify_fn verify,void *crypto);
 /* Number of the highest retry attempt in flight, for profile-aware ACK RTO. */
 uint8_t og_sr_tx_largest_attempt(const og_sr_tx_t *tx);
 /* Expired ACK time allows retransmission of *unacknowledged* fragments only.

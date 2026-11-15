@@ -24,6 +24,7 @@
 #include "lora_wire.h"
 #include "lora_schedule.h"
 #include "lora_modes.h"
+#include "lora_arq_timing.h"
 #include "lora_profile_control.h"
 #include "lora_profile_verify_timing.h"
 #include "lora_auto.h"
@@ -152,7 +153,8 @@ static int64_t arq_last_tx_ms;
 static bool high_pa_verified;
 static bool peer_arq_seen;
 static int64_t peer_arq_at_ms,last_arq_caps_ms;
-static bool peer_ultra_capable; /* Only authenticated ARQ_CAPS=3 matches Ultra CR4/8. */
+static bool peer_ultra_capable; /* Authenticated ARQ_CAPS >=3 matches Ultra CR4/8. */
+static bool peer_compact_ack_capable; /* v3.0.6-rc.2: SF9/SF12 16-byte HMAC ACK. */
 
 /* A profile change is explicitly user-initiated. Both radios exchange HMAC-
  * authenticated OGM2 control frames on the OLD profile before either switches.
@@ -382,7 +384,7 @@ static void derive_radio_key(const uint8_t k[32]) {
     if(!radio_key_ready){radio_psa_id=0;memset(radio_key,0,32);}
     memset(h,0,32);
     /* The old peer is not trusted after a key rotation. */
-    peer_seen=false;peer_arq_seen=false;memset(peer_mac,0,6);
+    peer_seen=false;peer_arq_seen=false;peer_compact_ack_capable=false;memset(peer_mac,0,6);
     memset(pending,0,sizeof(pending));memset(received,0,sizeof(received));
     memset(controls,0,sizeof(controls));
     profile_state.phase=OG_PROFILE_IDLE;
@@ -489,6 +491,9 @@ static void profile_start_offer(uint8_t target, bool force, bool automatic, bool
     if(target==OG_MODE_ULTRA && !peer_ultra_capable){
         output("PROFILE|ERROR|PEER_REQUIRES_V305_ULTRA_FEC8\n");return;
     }
+    if((target==OG_MODE_MAX || target==OG_MODE_ULTRA) && !peer_compact_ack_capable){
+        output("PROFILE|ERROR|PEER_REQUIRES_V3062_COMPACT_ACK\n");return;
+    }
     if(target==profile_state.current){profile_report("ACTIVE");return;}
     if(profile_has_pending()&&!force){output("PROFILE|ERROR|PENDING_MESSAGES_USE_FORCE\n");return;}
     if(!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){output("PROFILE|ERROR|NO_AUTHENTICATED_PEER\n");return;}
@@ -516,6 +521,7 @@ static bool profile_apply(uint8_t mode) {
     if(e!=ESP_OK){output("PROFILE|ERROR|RADIO_CONFIG_%s\n",esp_err_to_name(e));return false;}
     profile_state.current=mode;
     og_arq_bridge_set_ultra(&arq,mode==OG_MODE_ULTRA,48u,1u);
+    og_arq_bridge_set_range_mode(&arq,mode==OG_MODE_MAX);
     og_auto_reset(&auto_policy,(uint32_t)millis());
     auto_defer_until_ms=millis()+OG_AUTO_COOLDOWN_MS;
     /* New data can only flow once an authenticated HELLO proves both peers
@@ -850,7 +856,7 @@ static void media_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|PROFILE_SYNC=ULTRA_SLOTS4|LINK_RECOVERY=RENDEZVOUS36|AUTO_FALLBACK=LOCAL_AUTH|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|PROFILE_SYNC=ULTRA_SLOTS4|LINK_RECOVERY=RENDEZVOUS36|AUTO_FALLBACK=LOCAL_AUTH|ACK_COMPACT=16|ARQ_CAP=4|MAX_TEXT_FRAG=128|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     output("RECOVERY|%s|HOME=%s|SCANS=%" PRIu32 "|LOCKS=%" PRIu32
@@ -897,7 +903,7 @@ static bool peer_accept(const og_frame_t *f,int16_t rssi) {
     const int64_t t=millis();
     if(peer_seen && memcmp(peer_mac,f->sender,6)!=0 && t-peer_at_ms<OG_PEER_STALE_MS)return false;
     if(memcmp(peer_mac,f->sender,6)!=0){
-        peer_ultra_capable=false;
+        peer_ultra_capable=false;peer_compact_ack_capable=false;
         peer_arq_seen=false;auto_enabled=false;auto_peer_enabled=false;
         auto_ctrl_pending=false;og_auto_reset(&auto_policy,(uint32_t)millis());
     }
@@ -919,7 +925,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         (void)og_recovery_step(&recovery,(uint32_t)millis(),0,
               profile_state.current,false,true);
         recovery_locks++;
-        peer_arq_seen=false;peer_ultra_capable=false;last_arq_caps_ms=0;
+        peer_arq_seen=false;peer_ultra_capable=false;peer_compact_ack_capable=false;last_arq_caps_ms=0;
         auto_peer_enabled=false;auto_last_metric_session=0;auto_last_metric_id=0;
         auto_defer_until_ms=millis()+OG_RECOVERY_AUTO_DEFER_MS;
         output("RECOVERY|AUTHENTICATED|BALANCED|PEER_RESTORED\n");
@@ -1026,15 +1032,21 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         return;
     }
     if(f.type==OG_TYPE_ARQ_CAPS){
-        if(f.length==1 && (f.data[0]>=1 && f.data[0]<=3)){
+        if(f.length==1 && (f.data[0]>=1 && f.data[0]<=4)){
             peer_arq_seen=true;peer_arq_at_ms=millis();
             peer_ultra_capable=f.data[0]>=3;
+            peer_compact_ack_capable=f.data[0]>=4;
         }
         return;
     }
     if(f.type==OG_TYPE_PROFILE_OFFER){
         if(!profile_nonce_valid(&f))return;
         if(f.data[0]==OG_MODE_ULTRA && !peer_ultra_capable){
+            og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
+            (void)control_add(&reject,15);return;
+        }
+        if((f.data[0]==OG_MODE_MAX || f.data[0]==OG_MODE_ULTRA) &&
+           !peer_compact_ack_capable){
             og_frame_t reject=profile_frame(OG_TYPE_PROFILE_REJECT,f.data[0],f.session,f.id);
             (void)control_add(&reject,15);return;
         }
@@ -1286,7 +1298,14 @@ static void process_command(const og_command_t *c) {
             }
             const uint8_t window=weak?1:2;
             og_arq_bridge_set_ultra(&arq,true,payload,window);
-        }else og_arq_bridge_set_ultra(&arq,false,OG_SR_PAYLOAD,OG_SR_MAX_WINDOW);
+        }else {
+            og_arq_bridge_set_ultra(&arq,false,OG_SR_PAYLOAD,OG_SR_MAX_WINDOW);
+            if(profile_state.current==OG_MODE_MAX){
+                /* Smaller SF9 TEXT frames; leave large photo/voice segments
+                 * unchanged so no previously valid media transfer breaks. */
+                og_arq_bridge_set_range_text_payload(&arq,c->bulk_media?OG_SR_PAYLOAD:128u);
+            }
+        }
         (void)og_arq_bridge_begin(&arq,c->bulk_session,c->bulk_transfer,
                                   c->length,c->bulk_urgent,&arq_io);return;
     }
@@ -1362,6 +1381,14 @@ static void service_queues(void) {
                            (f->type==OG_TYPE_PROFILE_AGREE || f->type==OG_TYPE_PROFILE_REJECT)?1:
                            (f->type==OG_TYPE_HELLO?2:1);
             if(rank!=priority || (waiting_for_ack && rank!=0))continue;
+            /* Half-duplex SF9/SF12 ACKs remain on air up to seconds: never
+             * transmit opportunistic AUTO_METRIC/HELLO/CAPS while awaiting
+             * a bitmap ACK. Mandatory peer control replies still preempt. */
+            if(arq.tx_used && (profile_state.current==OG_MODE_MAX ||
+                               profile_state.current==OG_MODE_ULTRA) &&
+               f->type!=OG_TYPE_RADIO_ACK &&
+               f->type!=OG_TYPE_PROFILE_AGREE &&
+               f->type!=OG_TYPE_PROFILE_REJECT)continue;
             if(arq.tx_used && peer_arq_seen && f->type==OG_TYPE_ARQ_CAPS)continue;
             /* Discovery cannot consume airtime while real peer traffic is
              * flowing. It is disposable, not a delivery guarantee. */
@@ -1450,18 +1477,24 @@ static void radio_loop(void *arg) {
         const uint32_t poll_ms=(arq.tx_used && arq.tx.phase==OG_SR_MORE)?2:OG_RX_POLL_MS;
         e=offgrid_sx1278_receive(sx,bytes,sizeof(bytes),&n,&info,poll_ms);
         if(e==ESP_OK){
-            if(n && bytes[0]==OG_SR_VERSION){
+            if(n && (bytes[0]==OG_SR_VERSION ||
+                     (n==OG_SR_TAG && arq.compact_ack_active))){
                 const uint32_t was=arq.reject_auth;
-                uint32_t silence=profile_state.current==OG_MODE_ULTRA?350u:
-                                 profile_state.current==OG_MODE_MAX?1950u:
-                                 profile_state.current==OG_MODE_BALANCED?480u:200u;
+                /* Delay PARTIAL ACK until after the possible next DATA
+                 * packet; SF12 fragments otherwise collide with premature
+                 * ACK transmissions. END_BURST still ACKs within 80 ms. */
+                uint8_t fragment_payload=OG_SR_PAYLOAD;
+                if(n>OG_SR_HEADER+OG_SR_TAG && bytes[1]==OG_SR_DATA)
+                    fragment_payload=og_sr_payload_from_flags(bytes[2]);
+                const uint32_t silence=og_lora_arq_silence_ms(
+                    profile_state.current,fragment_payload);
                 (void)og_arq_bridge_receive(&arq,bytes,n,(uint32_t)millis(),silence,&arq_io);
                 if(arq.reject_auth==was){
                     if(recovery.probing){
                         (void)og_recovery_step(&recovery,(uint32_t)millis(),0,
                               profile_state.current,false,true);
                         recovery_locks++;
-                        peer_arq_seen=false;peer_ultra_capable=false;last_arq_caps_ms=0;
+                        peer_arq_seen=false;peer_ultra_capable=false;peer_compact_ack_capable=false;last_arq_caps_ms=0;
                         auto_peer_enabled=false;auto_last_metric_session=0;auto_last_metric_id=0;
                         auto_defer_until_ms=millis()+OG_RECOVERY_AUTO_DEFER_MS;
                         output("RECOVERY|AUTHENTICATED|BALANCED|ARQ_PEER_RESTORED\n");
@@ -1505,7 +1538,7 @@ static void radio_loop(void *arg) {
                                      peer_arq_seen?15000:1100)){
             last_arq_caps_ms=now;
             og_frame_t cap=new_frame(OG_TYPE_ARQ_CAPS,boot_session,0);
-            cap.length=1;cap.data[0]=3; /* v3.0.5 Ultra CR4/8 peer */
+            cap.length=1;cap.data[0]=4; /* authenticated SF9/SF12 16-byte ACK */
             (void)control_add(&cap,25+(esp_random()%30));
         }
         if(now-last_link_ms>=OG_STATUS_MS){last_link_ms=now;show_link();}
@@ -1515,14 +1548,10 @@ static void radio_loop(void *arg) {
         /* SR bitmap ACKs MUST preempt old HELLO/CAPS and any long outgoing
          * transfer; all RF work remains serialized in this owner task. */
         char peer[18];mac_text(peer_mac,peer);
-        const uint32_t silence=profile_state.current==OG_MODE_ULTRA?350u:
-                               profile_state.current==OG_MODE_MAX?1950u:
-                               profile_state.current==OG_MODE_BALANCED?480u:200u;
-        const uint32_t ack_timeout=profile_state.current==OG_MODE_ULTRA?
-            og_ultra_ack_wait_ms(OG_SR_HEADER+OG_SR_ACK_BYTES+OG_SR_TAG,
-                 og_sr_tx_largest_attempt(&arq.tx)) :
-                                   profile_state.current==OG_MODE_MAX?2250u:
-                                   profile_state.current==OG_MODE_BALANCED?750u:420u;
+        const uint32_t silence=og_lora_arq_silence_ms(
+            profile_state.current,arq.rx_used?arq.rx.fragment_payload:OG_SR_PAYLOAD);
+        const uint32_t ack_timeout=og_lora_arq_ack_rto_ms(
+            profile_state.current,og_sr_tx_largest_attempt(&arq.tx));
         bool legacy_busy=false;
         for(size_t i=0;i<OG_PENDING;i++)if(pending[i].used)legacy_busy=true;
         /* If this is an older peer, avoid transmitting incompatible ARQ
