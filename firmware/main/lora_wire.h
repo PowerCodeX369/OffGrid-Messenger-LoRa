@@ -61,7 +61,10 @@ static inline bool og_wire_valid(const og_frame_t *f, size_t n) {
                     (uint32_t)f->data[4]<<16 | (uint32_t)f->data[5]<<24);
     if(f->type==OG_TYPE_AUTO_METRIC)
         return f->length==8 && f->data[5]>=1 && f->data[5]<=4 && f->data[6]<=1;
-    if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 && (f->data[0]==1 || f->data[0]==2);
+    /* v3.0.5 transmits capability 3 for SF12 CR4/8, while 1/2 remain
+     * valid for older authenticated peers. Reject 0 and unknown versions. */
+    if(f->type==OG_TYPE_ARQ_CAPS)return f->length==1 &&
+        (f->data[0]>=1 && f->data[0]<=3);
     if(f->type==OG_TYPE_PROFILE_OFFER || f->type==OG_TYPE_PROFILE_AGREE ||
        f->type==OG_TYPE_PROFILE_REJECT)
         return f->length==6 && f->data[0]>=1 && f->data[0]<=4;
