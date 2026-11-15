@@ -1,3 +1,5 @@
+> **Current v3.0.5-rc.1 browser source (APP_VERSION=1.10.0-rc2-final-weaklink):** encrypted IndexedDB waiting-text outbox, app-receipt-aware retry, text/control queue priority and bounded USB startup checks. Requires firmware `RF_POLICY=ULTRA12_FEC8` on both radios; deploy the entire folder, hard refresh and reconnect on both browsers. [Full requirements and test plan](../docs/V3_0_5_FINAL_RELIABLE_TEXT.md).
+
 > **v3.0.4-rc.1 Ultra SF12 web client:** Requires v3.0.4 on both ESP32s. Settings now offer Ultra Long Range (SF12/BW125) in addition to original SF9 Max Range. Encrypted text and receipts only while Ultra is active; photo/microphone controls refuse to send. This bundled web version expects `READY|...PROFILES=4|ULTRA=SF12_TEXT_ONLY`, so deploy the complete `web/` directory on **both** browsers, then hard refresh. SF12 ARQ and media restrictions are also implemented in the companion firmware. See [`docs/V3_0_4_ULTRA_LONG_RANGE.md`](../docs/V3_0_4_ULTRA_LONG_RANGE.md).
 
 # Web messenger v1.8.0-rc.6 — text latency fairness

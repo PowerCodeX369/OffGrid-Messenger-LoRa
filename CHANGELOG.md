@@ -1,3 +1,12 @@
+## v3.0.5-rc.1 — Final weak-link delivery stabilization candidate (2026-11-15)
+
+- **Encrypted persistent text outbox:** Android native encrypted history + Web IndexedDB now retain undelivered outgoing text as `waiting`; active, authenticated clients retry only after fresh LoRa peer traffic. 15–300-second exponential backoff and per-message 0–5-second pseudorandom jitter; no fake delivery receipts. Restore prior failed/in-flight texts as waiting rather than silently discarding them. No cloud service, no unencrypted message spool.
+- **Application-delivery correctness:** distinct message ID vs fresh AES-GCM radio transfer ID per attempt; authenticated delivered/read/played receipts alone upgrade ticks; duplicate receiver messages re-ACKed; receipt grace extended for Ultra. Native receipt state machine preserves delivered/read when a retry is pending.
+- **Ultra RF improvements:** SF12/BW125 now uses CR4/8 FEC (SF9/BW125 Max Range remains CR4/5 and unchanged), 12 bounded ARQ attempts, re-computed ACK deadlines from SF12/CR4/8 airtime with increasing backoff, existing adaptive small fragment sizes and one-frame weak-link windows. Old firmware Ultra is blocked until authenticated peer advertises capability 3. Retains high-power opt-in and signed profile switching.
+- **Priority and diagnostics:** queued short text and receipts take precedence over long media at safe transfer boundaries; additional ARQ counters and bounded Web Serial STATUS retry to avoid amplifying `EVENT_QUEUE_FULL` during a failed radio boot. MEDIA still rejects Ultra.
+- **Compatibility and version:** Android versionCode 305, web v1.10.0-rc.2-final-weaklink, matching new firmware marker `RF_POLICY=ULTRA12_FEC8` on USB and BLE. Keeps `FW=1.8.0-rc.4` historical web compatibility identifier, so check RF_POLICY—not FW—to confirm this release.
+- **Validation scope:** full native/Node/C/Python host regression suite and isolated SHA256/Git archive checks. No ESP-IDF toolchain or Android SDK available in build container; no physical BLE/RF or low-battery qualification. Release remains `rc.1` until two-board field acceptance. [Details and safe rollback](docs/V3_0_5_FINAL_RELIABLE_TEXT.md).
+
 ## v3.0.4-rc.1 — SF12 Ultra Long Range integrated into v3.0.3 (2026-11-14)
 
 - Add **fourth manual RF profile** `ULTRA` SF12/BW125/CR4/5 at verified nominal 18 dBm; Auto can enter Ultra on weak bidirectional metrics. Existing SF9 Max Range remains exactly SF9/BW125 with the same power setting.
