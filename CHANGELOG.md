@@ -1,3 +1,12 @@
+## v3.0.6-rc.1 — Peer rediscovery and reliable automatic RF downgrade (2026-11-15)
+
+- **Recover from split modulation:** after prolonged absence of authenticated peer traffic on a non-Balanced profile, periodically rendezvous on the common SF7/BW250 boot modulation; only remain there after verifying a peer HMAC. Return home and retry if not found. Keep SF9 and SF12 configurations unchanged.
+- **Downgrade while diagnostics are missing:** allow recent locally authenticated RSSI/SNR plus previously authenticated peer Auto approval to propose a safer mode even when a remote metric report is stale. Promotions still require both directions, and every switch still requires authenticated peer agreement/verification.
+- **Avoid ARQ adaptation deadlocks:** urgent safer-profile offers can cancel unconfirmed encrypted transfers on either radio, sending explicit failures for the client outbox to retry rather than faking delivery; scheduled quality reports coalesce and don't vanish merely because a peer was heard.
+- **Restore receiver operation:** bounded continuous-RX re-arm on a silent Balanced peer, fast HELLO cadence while searching, stale-media-boost release, peer-capability refresh after reconnect, and recovery counters/diagnostics.
+- Preserve native Android UI, Web Serial messenger, encryption, messages/receipts, photo/voice codecs, SF7/SF9/SF12 modulation, GATT implementation, RF packet format and SX1278 driver. Android versionCode incremented to 306 (no behavioral/UI changes).
+- Source-level C, JavaScript and Kotlin tests include authenticated recovery and policy safety regressions; target firmware/Android builds and two-radio field acceptance remain pending. See `docs/V3_0_6_LINK_RELIABILITY_AND_RENDEZVOUS.md`.
+
 ## v3.0.5-rc.4 — SF12 verification collision avoidance and browser duplicate-send guard (2026-11-15)
 
 - Stagger authenticated SF12 verification HELLOs by initiator/responder role. Prior implementation sent multiple-second CR4/8 HELLOs simultaneously after mode change; both could collide until rollback. Pure timing helper and airtime-based host tests protect the old Fast/Balanced/Range verification timing.
