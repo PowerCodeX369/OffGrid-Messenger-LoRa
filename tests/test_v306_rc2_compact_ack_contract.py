@@ -23,12 +23,14 @@ assert 'og_arq_bridge_set_range_text_payload(&arq,c->bulk_media?OG_SR_PAYLOAD:12
 assert 'if(arq.tx_used && (profile_state.current==OG_MODE_MAX ||' in main
 assert 'OG_MODE_MAX?3u:6u' in main
 assert 'OG_MODE_ULTRA' in f('firmware/main/lora_modes.h')
-# No changes to the native Android/web UI, radio power, encryption or driver.
+# rc.3 may update Android/web labels and Auto controls; the rc.2 compact
+# ACK implementation, BLE authentication, PA modes and SPI driver are frozen.
 import subprocess
-protected=['android','web','firmware/components/offgrid_sx1278',
+protected=['firmware/components/offgrid_arq','firmware/components/offgrid_sx1278',
            'firmware/main/ble_bridge.c','firmware/main/ble_auth_psa.h',
-           'firmware/main/lora_modes.h']
-changed=subprocess.check_output(['git','diff','--name-only','v3.0.6-rc.1-link-recovery',
+           'firmware/main/lora_modes.h','firmware/main/lora_arq_timing.h',
+           'android/app/src/main/java/com/offgrid/messenger/PremiumUi.kt']
+changed=subprocess.check_output(['git','diff','--name-only','v3.0.6-rc.2-compact-arq',
                                  '--',*protected],cwd=r).decode().strip()
 assert not changed, changed
-print('PASS: v3.0.6-rc.2 compact authenticated ACK, per-profile size/timing, safe cap-4 peer gate, frozen Android/web/SX1278')
+print('PASS: rc.2 signed compact ACK preserved; PA/SPI/BLE-auth/native UI unchanged by rc.3')

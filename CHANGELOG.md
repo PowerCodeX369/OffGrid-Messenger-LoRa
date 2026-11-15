@@ -1,3 +1,11 @@
+## v3.0.6-rc.3 — Exact RSSI bands and disconnected-peer Auto search (2026-11-15)
+
+- Replace Fast-first automatic policy with the explicit operator requested bands: Balanced for RSSI above −100 dBm; Max for −130 to −100 dBm inclusive; Ultra below −130 dBm. Promotion and downgrade both map directly to the band on the freshest authenticated LoRa RSSI observation. An unavailable packet is not interpreted as −131 dBm. Reject stale/unconsented samples; use the worse of both directions when the peer metric is recent.
+- Preserve authenticated coordinator OFFER/AGREE/verify, 16-byte Max/Ultra ACK, AES-GCM application content, original UI and SX1278 driver. Failed offers are backed off; ongoing unconfirmed ciphertext can be explicitly requeued on a degrading link; no synthetic delivered/read ticks.
+- Add bounded, provisional Auto profile scanning after true radio silence, including **Balanced→Max→Ultra** (rather than only scanning Balanced from Max/Ultra). Retain legacy manual rendezvous. A scan becomes active only after authenticated peer reception; otherwise home profile is restored and rescanned later. Discovery is best-effort, not guaranteed over an absent physical RF path.
+- Update Android native LoRa mode labels/telemetry and web radio-mode UI; show exact thresholds and preserve manual override/high-power safety confirmation. Increment Android versionCode to 307. Keep the web-compatible `FW=1.8.0-rc.4` wire marker; advertise `AUTO_SCAN=TRIBAND|AUTO_RSSI=-100,-130` to distinguish updated firmware.
+- Add deterministic host boundary tests, lost-link state-machine tests, Android parsing tests and source integration contracts. Source/host validated; ESP-IDF 6.1 full target build, Android APK build and physical field acceptance are still outstanding. [Deployment and tests](docs/V3_0_6_RC3_RSSI_BANDS_AND_AUTORECOVERY.md).
+
 ## v3.0.6-rc.2 — SF9/SF12 compact ACK & airtime-guarded transfers (2026-11-15)
 
 - Fix the reported long SF9 text latency and failed SF12 text transmissions by replacing 34-byte bitmap ACKs with **16-byte full authenticated HMAC-SHA256-128 tags**. Active transfer IDs and at most three outstanding bitmap candidates reconstruct metadata without shortening the cryptographic tag.

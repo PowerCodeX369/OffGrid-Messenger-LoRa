@@ -8,10 +8,10 @@ fw=(r/'firmware/main/main.c').read_text()
 auto=(r/'firmware/main/lora_auto.h').read_text()
 rec=(r/'firmware/main/lora_link_recovery.h').read_text()
 assert 'link_recovery_service();' in fw
-assert 'og_recovery_step(&recovery' in fw
-assert 'RECOVERY|AUTHENTICATED|BALANCED|PEER_RESTORED' in fw
+assert 'og_recovery_step(&recovery' in fw and 'og_recovery_step_auto(&recovery' in fw
+assert 'RECOVERY|AUTHENTICATED|%s|PEER_RESTORED' in fw
 assert 'RECOVERY|RX_REARM|BALANCED|NO_AUTHENTICATED_PEER' in fw
-assert 'RECOVERY|SCANNING|BALANCED|HOME=' in fw
+assert 'RECOVERY|SCANNING|%s|HOME=' in fw
 assert 'RECOVERY|HOME|' in fw
 assert 'LINK_RECOVERY=RENDEZVOUS36' in fw
 assert 'og_auto_decide_linkaware' in auto and 'og_auto_decide_linkaware' in fw
@@ -27,7 +27,7 @@ assert 'if(!peer_accept(&f,rssi))return;' in fw
 assert 'og_recovery_step(&recovery,(uint32_t)millis(),0' in fw
 assert 'OG_RECOVERY_SCAN_MS 15000u' in rec and 'OG_RECOVERY_HOME_MS 10000u' in rec
 assert 'OG_RECOVERY_ULTRA_LOSS_MS 80000u' in rec
-assert 'versionCode=306' in (r/'android/app/build.gradle.kts').read_text()
+assert 'versionCode=307' in (r/'android/app/build.gradle.kts').read_text()
 assert 'p.spreading_factor=9' in (r/'firmware/main/lora_modes.h').read_text()
 assert 'p.spreading_factor=12' in (r/'firmware/main/lora_modes.h').read_text()
 print('PASS: v3.0.6 authenticated common-profile recovery, weak-link Auto downgrade, FIFO/media/text preservation')

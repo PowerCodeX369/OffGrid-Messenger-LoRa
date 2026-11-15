@@ -4,7 +4,7 @@ r=Path(__file__).resolve().parents[1]
 f=lambda p:(r/p).read_text()
 a=f('android/app/src/main/java/com/offgrid/messenger/MainActivity.kt')
 w=f('web/app.js');fw=f('firmware/main/main.c')
-assert 'versionCode=306' in f('android/app/build.gradle.kts')
+assert 'versionCode=307' in f('android/app/build.gradle.kts')
 assert 'RF_POLICY=ULTRA12_FEC8' in fw and 'RF_POLICY=ULTRA12_FEC8' in f('firmware/main/ble_bridge.c')
 assert 'RF_POLICY=ULTRA12_FEC8' in a and 'RF_POLICY=ULTRA12_FEC8' in w
 assert 'peer_ultra_capable=f.data[0]>=3' in fw and 'cap.data[0]=4' in fw
