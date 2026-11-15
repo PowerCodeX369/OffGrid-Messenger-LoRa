@@ -193,6 +193,7 @@ static bool auto_seen_control;
 static uint32_t auto_last_metric_session, auto_last_metric_id;
 static bool auto_peer_enabled;
 static uint32_t auto_attempts, auto_failures;
+static int64_t auto_failure_retry_ms; /* bounded retry backoff after failed handshake */
 static uint32_t auto_last_metric_loss_count;
 static uint8_t auto_peer_recent_losses;
 /* Recovery only touches SX1278 from the sole radio owner task. */
@@ -523,21 +524,22 @@ static bool profile_apply(uint8_t mode) {
     og_arq_bridge_set_ultra(&arq,mode==OG_MODE_ULTRA,48u,1u);
     og_arq_bridge_set_range_mode(&arq,mode==OG_MODE_MAX);
     og_auto_reset(&auto_policy,(uint32_t)millis());
-    auto_defer_until_ms=millis()+OG_AUTO_COOLDOWN_MS;
+    auto_defer_until_ms=millis()+2000; /* no 45s delay at RSSI boundaries */
     /* New data can only flow once an authenticated HELLO proves both peers
      * really switched. Until then, hold normal outgoing transmissions. */
     return true;
 }
-/* On a prolonged authenticated-peer silence, temporarily rendezvous on
- * Balanced (the safe, common 10 dBm boot modulation). Profile probing never
- * makes another node appear 'delivered' and never accepts unauthenticated
- * data. The node goes back home if nobody is heard during the scan. */
+/* On authenticated-peer silence, AUTO searches Max/Ultra/Balanced across
+ * bounded windows; manual profile recovery retains its Balanced rendezvous.
+ * A scan is provisional until an authenticated RF frame arrives. No missing
+ * receipt is forged; unsuccessful scans restore the previous radio profile. */
 static void link_recovery_service(void){
     const uint32_t now=(uint32_t)millis();
     if(!radio_key_ready || !sx || !peer_seen ||
        profile_state.phase!=OG_PROFILE_IDLE || auto_ctrl_pending)return;
     const uint32_t age=(uint32_t)(millis()-peer_at_ms);
-    if(media_boost_active && age>OG_RECOVERY_ULTRA_LOSS_MS){
+    if(media_boost_active && age>(auto_enabled && auto_peer_enabled ?
+       OG_AUTO_RECOVERY_BAL_LOSS_MS : OG_RECOVERY_ULTRA_LOSS_MS)){
         /* An abandoned media Fast boost must not prevent rediscovery for
          * ten minutes after the phone or far-end radio loses contact. */
         media_boost_active=false;media_restore_requested=false;
@@ -561,22 +563,29 @@ static void link_recovery_service(void){
             output("RECOVERY|RX_REARM|BALANCED|NO_AUTHENTICATED_PEER\n");
         }else output("RECOVERY|ERROR|RX_REARM_FAILED\n");
     }
-    const bool blocked=(age<OG_PEER_STALE_MS) ||
-        (profile_state.current==OG_MODE_BALANCED && !recovery.probing);
-    const og_recovery_action_t action=og_recovery_step(&recovery,now,age,
-           profile_state.current,blocked,false);
-    if(action==OG_RECOVERY_ENTER_BALANCED){
+    const bool auto_search=auto_enabled && auto_peer_enabled && high_pa_verified;
+    const bool blocked=!auto_search && ((age<OG_PEER_STALE_MS) ||
+        (profile_state.current==OG_MODE_BALANCED && !recovery.probing));
+    const og_recovery_action_t action=auto_search ?
+        og_recovery_step_auto(&recovery,now,age,profile_state.current,false,
+            false,peer_ultra_capable && peer_compact_ack_capable) :
+        og_recovery_step(&recovery,now,age,profile_state.current,blocked,false);
+    if(action==OG_RECOVERY_ENTER_BALANCED || action==OG_RECOVERY_SCAN_PROFILE){
         /* These are ciphertext packets; the Android/web outbox retains them
          * by message ID for later retry after peer discovery. */
         if(profile_has_pending())profile_reset_pending();
-        if(!profile_apply(OG_MODE_BALANCED)){
+        const uint8_t scan=recovery.multi_mode?recovery.scan_mode:OG_MODE_BALANCED;
+        if(!profile_apply(scan)){
+            /* A failed modem transition is not an authenticated recovery. */
+            (void)profile_apply(recovery.home);
             og_recovery_reset(&recovery);return;
         }
         recovery_scans++;
         last_hello_ms=-OG_DISCOVERY_HELLO_MS;
         memset(controls,0,sizeof(controls));
-        output("RECOVERY|SCANNING|BALANCED|HOME=%s|WINDOW_MS=%u\n",
-               og_mode_name(recovery.home),(unsigned)OG_RECOVERY_SCAN_MS);
+        output("RECOVERY|SCANNING|%s|HOME=%s|WINDOW_MS=%" PRIu32 "\n",
+               og_mode_name(scan),og_mode_name(recovery.home),
+               recovery.scan_until_ms-now);
         profile_report("RECOVERY_SCAN");
     }else if(action==OG_RECOVERY_RETURN_HOME){
         const uint8_t home=recovery.home;
@@ -610,6 +619,7 @@ static void profile_service(void) {
             profile_state.phase=OG_PROFILE_IDLE;
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
+            auto_failure_retry_ms=millis()+30000;
             output("PROFILE|TIMEOUT|%s|PEER_DID_NOT_AGREE\n",og_mode_name(profile_state.target));
             if(media_requested_profile){
                 if(profile_state.target==OG_MODE_LOW){
@@ -632,6 +642,7 @@ static void profile_service(void) {
             profile_state.phase=OG_PROFILE_IDLE;
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
+            auto_failure_retry_ms=millis()+30000;
             profile_report("ROLLED_BACK");
             if(media_requested_profile && profile_state.target==OG_MODE_LOW){
                 media_boost_active=false;output("MEDIA|BYPASS|FAST_RADIO_CONFIG_FAILED\n");
@@ -656,6 +667,7 @@ static void profile_service(void) {
             memset(controls,0,sizeof(controls));
             auto_defer_until_ms=millis()+60000;
             auto_failures++;
+            auto_failure_retry_ms=millis()+30000;
             profile_report("ROLLED_BACK");
             if(media_requested_profile && profile_state.target==OG_MODE_LOW){
                 media_boost_active=false;output("MEDIA|BYPASS|FAST_VERIFY_TIMEOUT\n");
@@ -688,16 +700,18 @@ static og_frame_t auto_control_frame(uint8_t type,bool enable,uint32_t session,u
     return f;
 }
 static void auto_report(const char *state){
-    output("AUTO|%s|MODE=%s|ENABLED=%u|PEER=%u|LEADER=%u|LOCAL_RSSI=%d|PEER_RSSI=%d|LOCAL_SNR_Q4=%d|PEER_SNR_Q4=%d|SAMPLES=%u/%u|QUALITY_READY=%u|LOCAL_AGE_MS=%" PRId64 "|REMOTE_AGE_MS=%" PRId64 "\n",
+    output("AUTO|%s|MODE=%s|ENABLED=%u|PEER=%u|LEADER=%u|LOCAL_RSSI=%d|PEER_RSSI=%d|LOCAL_SNR_Q4=%d|PEER_SNR_Q4=%d|SAMPLES=%u/%u|QUALITY_READY=%u|LOCAL_AGE_MS=%" PRId64 "|REMOTE_AGE_MS=%" PRId64 "|BALANCED_GT=-100|MAX_FROM=-130|ULTRA_LT=-130|RECOVERY=%s\n",
         state,og_mode_name(profile_state.current),(unsigned)auto_enabled,
         (unsigned)auto_peer_enabled,(unsigned)(peer_seen&&memcmp(own_mac,peer_mac,6)<0),
         (int)auto_policy.local.rssi_dbm,(int)auto_policy.remote.rssi_dbm,
         (int)auto_policy.local.snr_q4,(int)auto_policy.remote.snr_q4,
         (unsigned)auto_policy.local.samples,(unsigned)auto_policy.remote.samples,
-        (unsigned)(og_auto_fresh(&auto_policy.local,(uint32_t)millis()) &&
-                   og_auto_fresh(&auto_policy.remote,(uint32_t)millis())),
+        (unsigned)og_auto_recent(&auto_policy.local,(uint32_t)millis(),
+            profile_state.current==OG_MODE_ULTRA?OG_AUTO_ULTRA_LOCAL_FRESH_MS:
+            OG_AUTO_LOCAL_FRESH_MS),
         (int64_t)(millis()-auto_policy.local.at_ms),
-        (int64_t)(millis()-auto_policy.remote.at_ms));
+        (int64_t)(millis()-auto_policy.remote.at_ms),
+        recovery.probing?og_mode_name(recovery.scan_mode):"IDLE");
 }
 static void auto_command(bool enable){
     if(!radio_key_ready||!sx||!peer_seen||millis()-peer_at_ms>OG_PEER_STALE_MS){
@@ -754,60 +768,39 @@ static void auto_service(void){
         m.data[7]=(uint8_t)(loss_delta>15?15:loss_delta);
         (void)control_add(&m,50+(esp_random()%75));
     }
-    /* Exactly ONE coordinator per peer pair may initiate auto switches.
-     * At weak signal, bypass scheduling deferral while retaining signed
-     * OFFER/AGREE/verify. Never switch only one node by RSSI alone. */
-    /* Local authenticated RSSI is enough for an urgent DOWNGRADE proposal
-     * when the peer's optional quality report was lost. The remote must
-     * already have authenticated AUTO consent; peer must still sign AGREE. */
-    const bool local_emergency=auto_peer_enabled &&
-        og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
-        (uint32_t)(now-auto_policy.local.at_ms)<22000u &&
-        ((profile_state.current==OG_MODE_LOW &&
-          (auto_policy.local.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI ||
-           auto_policy.local.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4)) ||
-         (profile_state.current==OG_MODE_BALANCED &&
-          (auto_policy.local.rssi_dbm<=OG_AUTO_BAL_DOWN_RSSI ||
-           auto_policy.local.snr_q4<=OG_AUTO_BAL_DOWN_SNR_Q4)) ||
-         (profile_state.current==OG_MODE_MAX &&
-          (auto_policy.local.rssi_dbm<=-108 ||
-           auto_policy.local.snr_q4<=-16)));
-    const bool emergency=local_emergency ||
-        (og_auto_fresh(&auto_policy.local,(uint32_t)now) &&
-        og_auto_fresh(&auto_policy.remote,(uint32_t)now) &&
-        ((profile_state.current==OG_MODE_LOW &&
-          (auto_policy.local.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI || auto_policy.remote.rssi_dbm<=OG_AUTO_FAST_DOWN_RSSI ||
-           auto_policy.local.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4 || auto_policy.remote.snr_q4<=OG_AUTO_FAST_DOWN_SNR_Q4)) ||
-         (profile_state.current==OG_MODE_BALANCED &&
-          (auto_policy.local.rssi_dbm<=OG_AUTO_BAL_DOWN_RSSI || auto_policy.remote.rssi_dbm<=OG_AUTO_BAL_DOWN_RSSI ||
-           auto_policy.local.snr_q4<=OG_AUTO_BAL_DOWN_SNR_Q4 || auto_policy.remote.snr_q4<=OG_AUTO_BAL_DOWN_SNR_Q4)) ||
-         (profile_state.current==OG_MODE_MAX &&
-          (auto_policy.local.rssi_dbm<=-113 || auto_policy.remote.rssi_dbm<=-113 ||
-           auto_policy.local.snr_q4<=-20 || auto_policy.remote.snr_q4<=-20))));
-    if(memcmp(own_mac,peer_mac,6)>=0 || !auto_peer_enabled ||
-       (media_boost_active && profile_state.current==OG_MODE_LOW && !emergency) ||
-       (now<auto_defer_until_ms && !emergency) || auto_ctrl_pending)return;
-    if((uint32_t)(now-auto_policy.last_decision_ms)<OG_AUTO_METRIC_PERIOD_MS)return;
-    const uint32_t rf_retx=arq.retransmits+arq.ack_timeouts;
-    bool lossy=auto_peer_recent_losses>=2;
-    if(auto_policy.sample_counters_ready){
-        const uint32_t diff=rf_retx-auto_policy.last_local_retx;
-        lossy=lossy || diff>=2u;
-    }
-    auto_policy.last_local_retx=rf_retx;
-    auto_policy.sample_counters_ready=true;
-    auto_peer_recent_losses=0; /* do not reuse a 3.5-second loss report */
+    /* Auto is driven by firmware RSSI, independent of Android vs browser.
+     * One MAC-elected coordinator runs the signed two-node handshake. The
+     * latest authenticated RSSI selects the exact operator-defined band;
+     * silence itself does not fabricate an RSSI value. */
+    if(memcmp(own_mac,peer_mac,6)>=0 || !auto_peer_enabled || auto_ctrl_pending ||
+       now<auto_failure_retry_ms)return;
     const uint8_t chosen=og_auto_decide_linkaware(&auto_policy,profile_state.current,
-                                   (uint32_t)now,false,lossy,auto_peer_enabled);
+                                     (uint32_t)now,false,false,auto_peer_enabled);
+    const bool degrading=(chosen==OG_MODE_ULTRA && profile_state.current!=OG_MODE_ULTRA) ||
+          (chosen==OG_MODE_MAX &&
+           (profile_state.current==OG_MODE_LOW || profile_state.current==OG_MODE_BALANCED));
+    if(now<auto_defer_until_ms && !degrading)return;
+    if(media_boost_active && profile_state.current==OG_MODE_LOW && !degrading)return;
     if(chosen!=profile_state.current){
         if(chosen==OG_MODE_ULTRA && !peer_ultra_capable){
-            output("AUTO|SKIP|ULTRA_REQUIRES_BOTH_V305_FEC8\n");return;
+            if(now-auto_last_block_report_ms>10000){
+                auto_last_block_report_ms=now;
+                output("AUTO|SKIP|ULTRA_REQUIRES_BOTH_V305_FEC8\n");
+            }
+            return;
+        }
+        if((chosen==OG_MODE_ULTRA || chosen==OG_MODE_MAX) && !peer_compact_ack_capable){
+            if(now-auto_last_block_report_ms>10000){
+                auto_last_block_report_ms=now;
+                output("AUTO|SKIP|PEER_REQUIRES_V3062_COMPACT_ACK\n");
+            }
+            return;
         }
         /* A stalled weak-link transfer must not permanently block a safety
          * downgrade. Fail it explicitly so the encrypted app outbox retries
          * after the authenticated new-mode handshake. Never fake a receipt. */
         if(profile_has_pending()){
-            if(!emergency && !lossy){
+            if(!degrading){
                 if(now-auto_last_block_report_ms>10000){
                     auto_last_block_report_ms=now;
                     output("AUTO|WAIT|PENDING_TRANSFER\n");
@@ -818,7 +811,9 @@ static void auto_service(void){
             profile_reset_pending();
         }
         auto_attempts++;
-        output("AUTO|SELECT|%s|REASON=RSSI_SNR_LOSS\n",og_mode_name(chosen));
+        output("AUTO|SELECT|%s|REASON=RSSI_BAND|BOUNDARIES=-100,-130|LOCAL_RSSI=%d|REMOTE_RSSI=%d\n",
+               og_mode_name(chosen),(int)auto_policy.local.rssi_dbm,
+               (int)auto_policy.remote.rssi_dbm);
         profile_start_offer(chosen,false,true,false);
     }
 }
@@ -856,13 +851,13 @@ static void media_service(void){
 }
 static void show_ready(const char *source) {
     char mac[18];mac_text(own_mac,mac);
-    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|PROFILE_SYNC=ULTRA_SLOTS4|LINK_RECOVERY=RENDEZVOUS36|AUTO_FALLBACK=LOCAL_AUTH|ACK_COMPACT=16|ARQ_CAP=4|MAX_TEXT_FRAG=128|BENCH=APP|FROM=%s\n",mac,boot_session,source);
+    output("READY|%s|CHANNEL=0|SESSION=%" PRIu32 "|PROTO=2|CAP=180|STABLE=1|NVSKEY=1|FAMILY=LORA|RADIO=SX1278|FW=1.8.0-rc.4|DIAG=1|SACK=0|ACKENGINE=2|FLOW=2|PROFILES=4|SYNC=ONE_CLICK|AUTORF=1|ARQ=1|BULK=1|FRAG=224|WINDOW=6|USBPIPE=4|MEDIA=1|MEDIAFAST=1|RF_POLICY=ULTRA12_FEC8|RF_LINK_AGE=1|ULTRA=SF12_TEXT_ONLY|PROFILE_SYNC=ULTRA_SLOTS4|LINK_RECOVERY=RENDEZVOUS36|AUTO_SCAN=TRIBAND|AUTO_RSSI=-100,-130|AUTO_FALLBACK=LOCAL_AUTH|ACK_COMPACT=16|ARQ_CAP=4|MAX_TEXT_FRAG=128|BENCH=APP|FROM=%s\n",mac,boot_session,source);
 }
 static void show_link(void) {
     output("RECOVERY|%s|HOME=%s|SCANS=%" PRIu32 "|LOCKS=%" PRIu32
            "|AUTO_LOCAL=%u|AUTO_REMOTE=%u\n",
-           recovery.probing?"SCAN_BALANCED":"LISTEN",
-           og_mode_name(recovery.probing?recovery.home:profile_state.current),
+           recovery.probing?"SCAN":"LISTEN",
+           og_mode_name(recovery.probing?recovery.scan_mode:profile_state.current),
            recovery_scans,recovery_locks,
            (unsigned)og_auto_fresh(&auto_policy.local,(uint32_t)millis()),
            (unsigned)og_auto_fresh(&auto_policy.remote,(uint32_t)millis()));
@@ -928,7 +923,8 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
         peer_arq_seen=false;peer_ultra_capable=false;peer_compact_ack_capable=false;last_arq_caps_ms=0;
         auto_peer_enabled=false;auto_last_metric_session=0;auto_last_metric_id=0;
         auto_defer_until_ms=millis()+OG_RECOVERY_AUTO_DEFER_MS;
-        output("RECOVERY|AUTHENTICATED|BALANCED|PEER_RESTORED\n");
+        output("RECOVERY|AUTHENTICATED|%s|PEER_RESTORED\n",
+               og_mode_name(profile_state.current));
         profile_report("ACTIVE");
     }
     og_auto_quality_note(&auto_policy.local,rssi,snr_q4,(uint32_t)millis());
@@ -937,6 +933,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
     if(profile_state.phase==OG_PROFILE_VERIFYING){
         profile_state.phase=OG_PROFILE_IDLE;
         stat_profile_changes++;
+        auto_failure_retry_ms=0;
         profile_assist_until_ms=millis()+
            (profile_state.current==OG_MODE_ULTRA?20000:3200);
         profile_assist_next_ms=millis()+
@@ -982,10 +979,8 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
             og_auto_reset(&auto_policy,(uint32_t)millis());
             auto_defer_until_ms=millis()+10000;
             if(requested){
-                /* Prefer Fast once enough stable two-way samples arrive. */
-                auto_policy.changed_ms=(uint32_t)millis()-OG_AUTO_COOLDOWN_MS;
-                auto_policy.started_ms=(uint32_t)millis()-OG_AUTO_PROMOTION_MS;
-                auto_defer_until_ms=millis()+11000;
+                /* Do not promote to Fast: AUTO now uses exact RSSI bands. */
+                auto_defer_until_ms=millis()+1500;
             }
             profile_report("ACTIVE");
             auto_report(requested?"PEER_ON":"PEER_OFF");
@@ -1009,9 +1004,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
             auto_peer_enabled=auto_ctrl_target;
             og_auto_reset(&auto_policy,(uint32_t)millis());
             if(auto_enabled){
-                auto_policy.changed_ms=(uint32_t)millis()-OG_AUTO_COOLDOWN_MS;
-                auto_policy.started_ms=(uint32_t)millis()-OG_AUTO_PROMOTION_MS;
-                auto_defer_until_ms=millis()+11000;
+                auto_defer_until_ms=millis()+1500;
             }
             profile_report("ACTIVE");
             auto_report(auto_enabled?"ON":"OFF");
@@ -1120,6 +1113,7 @@ static void received_frame(const uint8_t *bytes,size_t n,int16_t rssi,int16_t sn
            profile_state.nonce==f.id && profile_state.offer_session==f.session &&
            profile_state.target==f.data[0]){
             profile_state.phase=OG_PROFILE_IDLE;
+            if(auto_requested_profile)auto_failure_retry_ms=millis()+12000;
             output("PROFILE|ERROR|PEER_BUSY_FINISH_TRANSFERS_AND_RETRY\n");
             if(media_requested_profile && profile_state.target==OG_MODE_LOW){
                 media_boost_active=false;
@@ -1412,7 +1406,7 @@ static void service_queues(void) {
         if(controls[i].frame.magic && controls[i].frame.type==OG_TYPE_RADIO_ACK)
             return;
     }
-    if(profile_state.phase!=OG_PROFILE_IDLE || arq.tx_used || arq.usb.active)return;
+    if(profile_state.phase!=OG_PROFILE_IDLE || recovery.probing || arq.tx_used || arq.usb.active)return;
     og_pending_t *p=choose_pending(now);
     if(!p)return;
     if(p->tries>=OG_TX_ATTEMPTS){
@@ -1497,7 +1491,8 @@ static void radio_loop(void *arg) {
                         peer_arq_seen=false;peer_ultra_capable=false;peer_compact_ack_capable=false;last_arq_caps_ms=0;
                         auto_peer_enabled=false;auto_last_metric_session=0;auto_last_metric_id=0;
                         auto_defer_until_ms=millis()+OG_RECOVERY_AUTO_DEFER_MS;
-                        output("RECOVERY|AUTHENTICATED|BALANCED|ARQ_PEER_RESTORED\n");
+                        output("RECOVERY|AUTHENTICATED|%s|ARQ_PEER_RESTORED\n",
+                               og_mode_name(profile_state.current));
                         profile_report("ACTIVE");
                     }
                     peer_at_ms=millis();peer_arq_at_ms=millis();
@@ -1514,11 +1509,15 @@ static void radio_loop(void *arg) {
         media_service();
         auto_service();
         link_recovery_service();
-        const int64_t hello_interval=(recovery.probing ||
-             (peer_seen && now-peer_at_ms>OG_PEER_STALE_MS &&
-              profile_state.current==OG_MODE_BALANCED))?
-            OG_RECOVERY_BEACON_MS:profile_state.current==OG_MODE_ULTRA?
-            24000:(peer_seen?OG_HELLO_MS:OG_DISCOVERY_HELLO_MS);
+        /* SF12 HELLO is multi-second airtime. During cross-profile search,
+         * keep a long listen slot rather than transmitting continuously. */
+        const int64_t hello_interval=recovery.probing ?
+            (profile_state.current==OG_MODE_ULTRA ?
+             OG_RECOVERY_ULTRA_BEACON_MS:OG_RECOVERY_BEACON_MS):
+            (peer_seen && now-peer_at_ms>OG_PEER_STALE_MS &&
+             profile_state.current==OG_MODE_BALANCED)?OG_RECOVERY_BEACON_MS:
+            profile_state.current==OG_MODE_ULTRA?24000:
+            (peer_seen?OG_HELLO_MS:OG_DISCOVERY_HELLO_MS);
         if(profile_state.phase==OG_PROFILE_IDLE && now>=profile_assist_until_ms && radio_key_ready && now-last_hello_ms>=hello_interval){
             last_hello_ms=now+(esp_random()%450);
             bool busy=false;

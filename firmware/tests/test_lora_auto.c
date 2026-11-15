@@ -2,59 +2,56 @@
 #include "lora_wire.h"
 #include <assert.h>
 #include <stdio.h>
-static void feed(og_auto_policy_t *p,int16_t rssi,int16_t snr,uint32_t now){
-    for(int i=0;i<4;i++){
-        og_auto_quality_note(&p->local,rssi,snr,now+100*i);
-        og_auto_quality_note(&p->remote,rssi,snr,now+100*i);
-    }
+static void sample(og_auto_policy_t *p,int local,int remote,uint32_t now){
+    og_auto_quality_note(&p->local,(int16_t)local,0,now);
+    og_auto_quality_note(&p->remote,(int16_t)remote,0,now);
 }
 int main(void){
     og_auto_policy_t p;og_auto_reset(&p,100);
-    feed(&p,-50,28,1000);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,20000,false,false)==OG_MODE_BALANCED); /* warmup */
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,47500,false,false)==OG_MODE_BALANCED); /* stale */
-    feed(&p,-70,20,47000);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,48100,false,false)==OG_MODE_BALANCED);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,52000,false,false)==OG_MODE_BALANCED);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,56000,false,false)==OG_MODE_BALANCED);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,60000,false,false)==OG_MODE_LOW);
-    og_auto_reset(&p,61000);
-    feed(&p,-110,-4,110000);
-    assert(og_auto_decide(&p,OG_MODE_LOW,110900,true,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,111000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,115000,false,false)==OG_MODE_MAX);
-    og_auto_reset(&p,116000);
-    feed(&p,-119,-24,162000);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,163000,false,false)==OG_MODE_BALANCED);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,167000,false,false)==OG_MODE_MAX);
-    og_auto_reset(&p,168000);
-    feed(&p,-70,24,215000);
-    assert(og_auto_decide(&p,OG_MODE_MAX,216000,false,false)==OG_MODE_MAX);
-    assert(og_auto_decide(&p,OG_MODE_MAX,220000,false,false)==OG_MODE_MAX);
-    assert(og_auto_decide(&p,OG_MODE_MAX,224000,false,false)==OG_MODE_MAX);
-    assert(og_auto_decide(&p,OG_MODE_MAX,228000,false,false)==OG_MODE_BALANCED);
-    og_auto_reset(&p,230000);
-    feed(&p,-110,-8,278000);
-    p.remote.at_ms=1;
-    assert(og_auto_decide(&p,OG_MODE_LOW,279000,false,true)==OG_MODE_LOW); /* stale peer -> no mode changes */
-    og_auto_reset(&p,285000);
-    feed(&p,-116,-20,286000);
-    assert(og_auto_decide(&p,OG_MODE_LOW,288000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,292000,false,false)==OG_MODE_MAX);
-    /* Observed range problem: downgrade ahead of -100 dBm, even during
-     * the anti-flap cooldown. Two fresh authenticated observations needed. */
-    og_auto_reset(&p,310000);
-    feed(&p,-86,8,311000);
-    assert(og_auto_decide(&p,OG_MODE_LOW,312000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,316000,false,false)==OG_MODE_BALANCED);
-    og_auto_reset(&p,320000);
-    feed(&p,-92,4,321000);
-    assert(og_auto_decide(&p,OG_MODE_LOW,322000,false,false)==OG_MODE_LOW);
-    assert(og_auto_decide(&p,OG_MODE_LOW,326000,false,false)==OG_MODE_MAX);
-    og_auto_reset(&p,330000);
-    feed(&p,-89,4,331000);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,332000,false,false)==OG_MODE_BALANCED);
-    assert(og_auto_decide(&p,OG_MODE_BALANCED,336000,false,false)==OG_MODE_MAX);
+    /* Exact boundaries: above -100 BAL, -100 through -130 MAX, below -130 ULTRA. */
+    assert(og_auto_rssi_band(-99)==OG_MODE_BALANCED);
+    assert(og_auto_rssi_band(-100)==OG_MODE_MAX);
+    assert(og_auto_rssi_band(-101)==OG_MODE_MAX);
+    assert(og_auto_rssi_band(-129)==OG_MODE_MAX);
+    assert(og_auto_rssi_band(-130)==OG_MODE_MAX);
+    assert(og_auto_rssi_band(-131)==OG_MODE_ULTRA);
+    assert(og_auto_rssi_band(-151)==OG_MODE_ULTRA);
+    sample(&p,-99,-99,5000);
+    assert(og_auto_decide(&p,OG_MODE_MAX,5000,false,false)==OG_MODE_BALANCED);
+    sample(&p,-100,-100,5500);
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,5500,false,false)==OG_MODE_MAX);
+    sample(&p,-130,-130,6000);
+    assert(og_auto_decide(&p,OG_MODE_MAX,6000,false,false)==OG_MODE_MAX);
+    sample(&p,-131,-131,6500);
+    assert(og_auto_decide(&p,OG_MODE_MAX,6500,false,false)==OG_MODE_ULTRA);
+    sample(&p,-130,-130,7000);
+    assert(og_auto_decide(&p,OG_MODE_ULTRA,7000,false,false)==OG_MODE_MAX);
+    sample(&p,-99,-99,7500);
+    assert(og_auto_decide(&p,OG_MODE_MAX,7500,false,false)==OG_MODE_BALANCED);
+    /* No Fast promotion, even at strongest RSSI. */
+    sample(&p,-40,-40,8000);
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,8000,false,false)==OG_MODE_BALANCED);
+    /* Worst-direction report is honored while recent, ignored when stale. */
+    sample(&p,-96,-131,9000);
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,9000,false,false)==OG_MODE_ULTRA);
+    og_auto_quality_note(&p.local,-95,0,30000);
+    assert(og_auto_decide(&p,OG_MODE_ULTRA,30000,false,false)==OG_MODE_BALANCED);
+    /* No new packets means no RSSI band decision, never invent -131. */
+    assert(og_auto_decide(&p,OG_MODE_BALANCED,92000,false,false)==OG_MODE_BALANCED);
+    assert(og_auto_decide_linkaware(&p,OG_MODE_BALANCED,30000,false,false,false)==OG_MODE_BALANCED);
+    sample(&p,-132,-132,94000);
+    assert(og_auto_decide_linkaware(&p,OG_MODE_BALANCED,94000,false,false,true)==OG_MODE_ULTRA);
+    assert(og_auto_decide_linkaware(&p,OG_MODE_BALANCED,94000,true,false,true)==OG_MODE_BALANCED);
+    /* Authentication telemetry never uses Bluetooth RSSI or SNR as a
+     * threshold override, and does not smooth away a newly crossed band. */
+    og_auto_quality_note(&p.local,-90,80,95000);
+    og_auto_quality_note(&p.local,-131,80,95100);
+    assert(p.local.rssi_dbm==-131);
+    /* Deep SF12 fades can have valid -26 dB SNR; do not discard their
+     * authenticated RSSI merely because the old parser capped SNR at -24. */
+    og_auto_quality_note(&p.local,-135,-104,95200);
+    assert(p.local.rssi_dbm==-135);
+    assert(og_auto_decide(&p,OG_MODE_MAX,95200,false,false)==OG_MODE_ULTRA);
     /* The signed OGM2 auto control and metric layouts are strict, so older
      * firmware cannot accidentally treat them as user plaintext. */
     og_frame_t a={.magic=OG_MAGIC,.version=OG_VERSION,.type=OG_TYPE_AUTO_CTRL,
@@ -76,6 +73,6 @@ int main(void){
     assert(OG_AUTO_FAST_DOWN_RSSI > OG_AUTO_FAST_RANGE_RSSI);
     assert(OG_AUTO_FAST_RANGE_RSSI >= OG_AUTO_BAL_DOWN_RSSI);
     assert(OG_AUTO_FAST_UP_RSSI>OG_AUTO_FAST_DOWN_RSSI);
-    assert(OG_AUTO_BAL_UP_RSSI>OG_AUTO_BAL_DOWN_RSSI);
-    puts("PASS: two-direction quality, hysteresis, cooldown, promotion, downgrade, busy/stale safety");
+    assert(OG_AUTO_BAL_UP_RSSI==OG_AUTO_BAL_DOWN_RSSI); /* no hysteresis per requested exact band */
+    puts("PASS: exact -100/-130 LoRa bands, instant reverse, stale/busy/consent safety, authenticated wire frames");
 }

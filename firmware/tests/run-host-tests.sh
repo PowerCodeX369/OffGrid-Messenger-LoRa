@@ -129,6 +129,7 @@ python3 tests/test_weak_link_release.py
 python3 tests/test_v15_profile.py
 python3 tests/test_v161_rc2_regression.py
 python3 tests/test_v17_adaptive.py
+python3 tests/test_v306_rc3_auto_bands.py
 if command -v clang >/dev/null 2>&1; then sh firmware/tests/run-syntax-checks.sh; fi
 
 python3 tests/test_v18_media.py
