@@ -30,10 +30,18 @@ data class RadioLink(
         "BALANCED" -> "Balanced"
         "RANGE" -> "Max Range"
         "ULTRA" -> "Ultra Long Range"
-        "AUTO" -> "Auto (adaptive)"
+        "AUTO" -> "Auto · local RSSI $rssiTarget"
         else -> "Unknown"
     }
-    val summary: String get() = "$signalLabel · $phyLabel · $modeLabel"
+    /** Informational target; only a verified firmware PROFILE|ACTIVE changes RF. */
+    val rssiTarget: String get() = when {
+        rssiDbm == null -> "Waiting for authenticated LoRa RSSI"
+        rssiDbm > -100 -> "Balanced"
+        rssiDbm >= -130 -> "Max Range"
+        else -> "Ultra"
+    }
+    val summary: String get() = "$signalLabel · $phyLabel · $modeLabel" +
+        if (rateMode == "AUTO") " · local RSSI band: $rssiTarget" else ""
 
     companion object {
         val choices: List<String> = listOf("AUTO", "FAST", "BALANCED", "RANGE", "ULTRA")

@@ -910,7 +910,7 @@ class MainActivity : ComponentActivity() {
                             state="Auto RF rejected by ESP32: $line"
                             Toast.makeText(this, state, Toast.LENGTH_LONG).show()
                         }else if(event=="ON" && requestedRadioMode=="AUTO"){
-                            clearRadioRequest();state="Automatic LoRa adaptation synchronized on both radios"
+                            clearRadioRequest();state="Auto enabled on both radios: Balanced > −100, Max −130..−100, Ultra < −130 dBm"
                         }else if(event=="OFF" && requestedRadioMode=="AUTO"){
                             clearRadioRequest();state="Auto RF disabled; manually select Auto again"
                         }

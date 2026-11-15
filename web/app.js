@@ -3,7 +3,7 @@
    Adapted from the original OffGrid web client, preserving its OGM4 AES-GCM codec. */
 const P=globalThis.OGP,$=id=>document.getElementById(id);
 const MAX_CHARS=500,MAX_PHOTO=48*1024,MAX_VOICE_MS=120000,STORE='OffGridMessengerV14';
-const APP_VERSION='1.10.0-rc4-ultra-sync-diagnostics';
+const APP_VERSION='3.0.6-rc.3-rssi-band-auto';
 const Media=globalThis.OffGridLoRaMedia;
 /* Played is a separate state for voice notes: reading the chat must never
  * imply that audio was listened to. Message tick status remains unchanged. */
@@ -12,8 +12,9 @@ const encoder=new TextEncoder();
 let port=null,reader=null,writer=null,readPromise=null,closing=false,verified=false,serialBuffer='',writeChain=Promise.resolve(),handshakeTimer=null;
 let handshakeAttempts=0;
 let localMac=null,secretKey=null,peerMac=null,activeContact='Nearby node',firmwareMismatchNotified=false;
-/* Profile changes require a user click. Firmware negotiates over authenticated
- * existing-profile radio frames, and both peers revert if not confirmed. */
+/* Manual changes require a click; AUTO ON arms firmware-owned automatic
+ * RSSI bands on both peers through authenticated control. No browser-only
+ * mode switching based on USB-reported signal is safe after RF contact loss. */
 let currentProfile='BALANCED', profileTransition=false, autoMode=false, autoBusy=false;
 let profileRadio={sf:7,bw:250000,power:10};
 globalThis.OffGridUltraActive=()=>currentProfile==='ULTRA';
@@ -319,7 +320,8 @@ function updateLinkBadge(){
  const node=$('linkModeLabel');if(!node)return;
  const signal=radioTelemetry.rssi===null?'RSSI unknown':`${radioTelemetry.rssi} dBm`;
  node.textContent=`${autoMode?'AUTO · ':''}${profileLabels[currentProfile]||currentProfile} · SF${profileRadio.sf} · BW ${profileRadio.bw/1000} kHz · ${profileRadio.power} dBm · ${signal}`;
- node.title=`Manual LoRa profile, not distance detection. Authenticated frames: ${radioTelemetry.rx}. Peer: ${radioTelemetry.peer}. Retries: ${radioTelemetry.retries}.`;
+ const target=radioTelemetry.rssi===null?'unknown':radioTelemetry.rssi> -100?'Balanced':radioTelemetry.rssi>= -130?'Max Range':'Ultra';
+ node.title=`${autoMode?'Auto RSSI bands: Balanced > -100 dBm; Max -100 to -130 dBm; Ultra < -130 dBm. Local RX band: '+target+'. Mode changes require authenticated peer agreement.':'Manual profile (Auto OFF).'} Authenticated frames: ${radioTelemetry.rx}. Peer: ${radioTelemetry.peer}. Retries: ${radioTelemetry.retries}.`;
 }
 
 function recordLinkResult(rtt,attempts,isPhoto=false){
@@ -1310,7 +1312,7 @@ async function runTransfers(){
 }
 function onProfileLine(line){
  const parts=line.split('|'),type=parts[1],mode=parts[2];
- if(type==='ACTIVE'||type==='ROLLED_BACK'){
+ if(type==='ACTIVE'||type==='ROLLED_BACK'||type==='RECOVERY_SCAN'||type==='RECOVERY_HOME'){
    if(['LOW','BALANCED','MAX','ULTRA'].includes(mode))currentProfile=mode;
    refreshStatus();
    const values={};for(const field of parts.slice(3)){
@@ -1324,6 +1326,8 @@ function onProfileLine(line){
    if(values.AUTO==='1'||values.AUTO==='0')autoMode=values.AUTO==='1';
    updateLinkBadge();
    if(type==='ROLLED_BACK')toast('Radio profile change rolled back; both nodes must be reachable.');
+   else if(type==='RECOVERY_SCAN')logUsb('Searching for authenticated peer on '+currentProfile);
+   else if(type==='RECOVERY_HOME')logUsb('Scan ended; returning to '+currentProfile);
    else if(verified)toast(`LoRa profile active: ${profileLabels[currentProfile]}`);
  }else if(['NEGOTIATING','PEER_REQUEST','AGREED','VERIFYING','TRANSITION'].includes(type)){
    profileTransition=true;
@@ -1340,7 +1344,7 @@ function onAutoLine(line){
    if(type==='OFF'||type==='PEER_OFF')autoMode=false;
    else if(type==='ON'||type==='PEER_ON'||fields.ENABLED==='1')autoMode=true;
    autoBusy=false;updateLinkBadge();
-   if(type==='ON')toast('Automatic radio adaptation enabled on both nodes');
+   if(type==='ON')toast('Auto enabled: Balanced > −100 dBm · Max −100 to −130 · Ultra < −130');
    if(type==='OFF')toast('Automatic adaptation disabled; manual modes remain available');
  }else if(type==='NEGOTIATING'){
    autoBusy=true;
@@ -1360,7 +1364,7 @@ async function requestAutoMode(enable){
     rfScheduler.depth||urgentReceipts.length||bulkLink?.active){
    toast('Finish pending messages and tests before changing automatic mode');return;
  }
- if(enable && !confirm('Enable automatic Fast → Balanced → Range radio adaptation? I have verified BOTH radios, matched 433 MHz antennas, stable 3.3 V under nominal +18 dBm TX, and local operating rules. Automatic Balanced also uses nominal +18 dBm for link margin.'))return;
+ if(enable && !confirm('Enable automatic LoRa RSSI bands on BOTH boards? Balanced above −100 dBm, Max Range from −100 through −130 dBm, Ultra below −130 dBm. I have checked BOTH matched 433 MHz antennas, board power under nominal +18 dBm, and applicable local RF rules. Ultra supports text only.'))return;
  autoBusy=true;
  try{
    if(enable){await writeLine('POWER18 VERIFIED');}
@@ -1397,11 +1401,11 @@ async function requestProfileChange(mode){
  }catch(e){profileTransition=false;toast('Profile request failed: '+e.message);}
 }
 function showProfileDialog(){showDialog('Automatic + manual LoRa modes',body=>{
- body.append(el('p','','Automatic mode prioritizes Fast. As both directions weaken it steps to Balanced, then Range; it returns toward Fast after sustained improvement. Both ESP32s must run v1.8.0-rc.4. Mode changes use the proven signed one-browser handshake and rollback. There is no fixed distance threshold.'));
+ body.append(el('p','','Firmware-owned automatic RSSI bands: Balanced when > −100 dBm; Max Range when −130 to −100 dBm (inclusive); Ultra when < −130 dBm. Both nodes must run v3.0.6-rc.3. Changes use an authenticated peer handshake; if packets stop entirely, the radios probe other profiles until they rediscover each other. RSSI cannot be measured during total silence.'));
  const automatic=el('button','primary-button',autoMode?'Turn automatic mode OFF':'Enable automatic mode');
  automatic.disabled=!verified||autoBusy||profileTransition;
  automatic.onclick=()=>{closeDialog();void requestAutoMode(!autoMode);};body.append(automatic);
- body.append(el('p','',`Automatic: ${autoMode?'ON':'OFF'} · Manual selection overrides AUTO. Manual Balanced is +10 dBm; automatic Balanced uses nominal +18 dBm to avoid losing link budget when leaving Fast.`));
+ body.append(el('p','',`Automatic: ${autoMode?'ON':'OFF'} · The Auto ON button is required after reboot; manual selection overrides Auto. Automatic Balanced uses nominal +18 dBm only after your RF power approval; manual Balanced stays at +10 dBm.`));
  const entries=[
   ['LOW','Fast / Nominal 18 dBm','SF7 · 500 kHz · +18 dBm (special PA_DAC; both boards must be checked)'],
   ['BALANCED','Balanced','SF7 · 250 kHz · +10 dBm · default at boot'],
@@ -1799,7 +1803,7 @@ function showInfo(){showDialog('LoRa chat information',body=>{
  body.append(el('p','','Single gray tick = SX1278 TxDone for all fragments. Double gray = authenticated encrypted delivery receipt. Double blue = authenticated read receipt. A timeout means unconfirmed, not definitely undelivered.'));
  });}
 function showSettings(){showDialog('LoRa settings',body=>{
- body.append(el('p','','OffGrid Messenger LoRa v1.8: compressed photos and short Opus voice notes are encrypted and segmented, with limited retries. Auto RF may choose Fast when both directions have safe signal margin and fall back based on losses. Manual modes stay in control. Voice recording is capped at 40 KiB and 120 seconds; natural continuous speech may reach the byte cap well before two minutes.'));
+ body.append(el('p','','OffGrid Messenger LoRa: encrypted text, photo and voice. Enable Auto in Automatic / manual LoRa modes to follow the exact signal boundaries: Balanced > −100 dBm, Max −130 to −100 dBm, Ultra < −130 dBm. Ultra is text-only. Automatic recovery explores profiles after complete RF silence; it cannot infer RSSI from missing packets. Voice recording is capped at 40 KiB and 120 seconds.'));
  const buttons=el('div','settings-actions');
  for(const [name,action] of [['Rename contact',showRename],['Node pairing key',showPairing],
    ['USB diagnostics',diagnoseUsb],['Automatic / manual LoRa modes',showProfileDialog],['LoRa speed test',showSpeedDiagnostics],['Clear history',()=>void clearHistory()]]){
