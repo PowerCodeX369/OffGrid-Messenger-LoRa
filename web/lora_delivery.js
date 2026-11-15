@@ -1,8 +1,9 @@
 /* LoRa v1.1: small testable delivery policy. No UI or network dependencies. */
 (function(root){'use strict';
- const receiptTimeoutMs = fragments => {
+ const receiptTimeoutMs = (fragments,ultra=false) => {
   if(!Number.isInteger(fragments)||fragments<1)throw Error('invalid fragment count');
-  return Math.min(30000,Math.max(8500,5000+fragments*1400));
+  return ultra?Math.min(480000,Math.max(180000,90000+fragments*30000)):
+   Math.min(90000,Math.max(15000,9000+fragments*2400));
  };
  /* True only once every fragment has actually completed SX1278 TX.
   * A radio ACK, by itself, must never produce a delivered/read tick. */

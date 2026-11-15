@@ -77,7 +77,7 @@
      * takes seconds. Never mark a valid long-range transfer as failed using
      * Fast-mode timeouts. The radio worker retains the actual ACK authority. */
     const ultra=!!root.OffGridUltraActive?.();
-    const ms=ultra?45000+Math.ceil(ciphertext.length/48)*14000:
+    const ms=ultra?Math.min(1_800_000,180_000+Math.ceil(ciphertext.length/48)*40_000):
       22000+Math.ceil(ciphertext.length/224)*4500;
     const timeout=setTimeout(()=>a.rejectFinal(Error('LoRa bitmap ACK transfer unconfirmed')),ms);
     try{await final;this.stats.confirmed++;}finally{clearTimeout(timeout);}
