@@ -22,6 +22,12 @@ cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
    firmware/tests/test_lora_auto.c -o "$auto_bin"
 "$auto_bin"
 rm -f "$auto_bin"
+recovery_bin=/tmp/offgrid-lora-recovery-$$
+cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
+    -Ifirmware/components/offgrid_sx1278/include \
+    firmware/tests/test_lora_link_recovery.c -o "$recovery_bin"
+"$recovery_bin"
+rm -f "$recovery_bin"
 profile_bin=/tmp/offgrid-lora-profile-switch-$$
 cc -std=c11 -Wall -Wextra -Werror -Ifirmware/main \
    -Ifirmware/components/offgrid_sx1278/include \
@@ -112,3 +118,5 @@ if command -v clang >/dev/null 2>&1; then sh firmware/tests/run-syntax-checks.sh
 
 python3 tests/test_v18_media.py
 python3 tests/test_v18_ui_source.py
+
+python3 tests/test_v306_recovery_contract.py
